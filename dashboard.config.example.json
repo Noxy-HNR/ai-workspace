@@ -1,0 +1,5 @@
+{
+  "dashboardPort": 9090,
+  "llamaHostPort": 10000,
+  "cptrPort": 8000
+}

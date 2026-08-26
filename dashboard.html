@@ -1,0 +1,1499 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Workspace Dashboard</title>
+    <style>
+        :root {
+            --bg-primary: #0d1117;
+            --bg-secondary: #161b22;
+            --bg-card: #1c2333;
+            --bg-card-hover: #1f2a3d;
+            --border: #30363d;
+            --text-primary: #e6edf3;
+            --text-secondary: #8b949e;
+            --text-muted: #6e7681;
+            --accent-blue: #58a6ff;
+            --accent-green: #3fb950;
+            --accent-red: #f85149;
+            --accent-yellow: #d29922;
+            --accent-purple: #bc8cff;
+            --accent-orange: #f0883e;
+            --accent-cyan: #39d2c0;
+            --shadow: 0 2px 8px rgba(0,0,0,0.3);
+            --shadow-lg: 0 4px 16px rgba(0,0,0,0.4);
+        }
+        
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            line-height: 1.5;
+        }
+        
+        /* Header */
+        .header {
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border);
+            padding: 16px 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+        
+        .header h1 {
+            font-size: 20px;
+            font-weight: 600;
+            background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        
+        .header-actions { display: flex; gap: 12px; }
+        
+        /* Buttons */
+        .btn {
+            padding: 8px 16px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--bg-card);
+            color: var(--text-primary);
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 500;
+            transition: all 0.15s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .btn:hover { background: var(--bg-card-hover); }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        
+        .btn-primary { background: #238636; border-color: #238636; }
+        .btn-primary:hover { background: #2ea043; }
+        .btn-primary:disabled { background: #238636; opacity: 0.5; }
+        
+        .btn-danger { background: #da3633; border-color: #da3633; }
+        .btn-danger:hover { background: #f85149; }
+        .btn-danger:disabled { background: #da3633; opacity: 0.5; }
+        
+        .btn-warning { background: #9e6a03; border-color: #9e6a03; }
+        .btn-warning:hover { background: #d29922; color: #000; }
+        
+        .btn-info { background: #1f6feb; border-color: #1f6feb; }
+        .btn-info:hover { background: #388bfd; }
+        
+        .btn-sm { padding: 4px 10px; font-size: 12px; }
+        
+        /* Layout */
+        .dashboard { max-width: 1400px; margin: 0 auto; padding: 24px; }
+        
+        /* Status Bar */
+        .status-bar {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+        .status-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 16px;
+            box-shadow: var(--shadow);
+        }
+        .status-card .label {
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-muted);
+            margin-bottom: 4px;
+        }
+        .status-card .value { font-size: 24px; font-weight: 700; }
+        .status-card .detail { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
+        
+        .status-green { color: var(--accent-green); }
+        .status-red { color: var(--accent-red); }
+        .status-yellow { color: var(--accent-yellow); }
+        .status-blue { color: var(--accent-blue); }
+        
+        /* Service Status */
+        .services-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+        .service-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: var(--shadow);
+            transition: all 0.2s ease;
+        }
+        .service-card:hover { border-color: var(--accent-blue); box-shadow: var(--shadow-lg); }
+        .service-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 12px;
+        }
+        .service-name { font-size: 16px; font-weight: 600; }
+        .service-badge {
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .badge-running { background: rgba(63,185,80,0.15); color: var(--accent-green); }
+        .badge-stopped { background: rgba(248,81,73,0.15); color: var(--accent-red); }
+        .badge-starting { background: rgba(210,153,34,0.15); color: var(--accent-yellow); }
+        
+        .service-details { margin: 12px 0; }
+        .service-detail-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 6px 0;
+            border-bottom: 1px solid var(--border);
+            font-size: 13px;
+        }
+        .service-detail-row:last-child { border-bottom: none; }
+        
+        .service-actions { display: flex; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
+        
+        /* Feedback Area */
+        .feedback-area {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 24px;
+            min-height: 60px;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        .feedback-title {
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: var(--text-secondary);
+        }
+        .feedback-line {
+            font-size: 13px;
+            padding: 2px 0;
+            font-family: 'Cascadia Code', 'Fira Code', monospace;
+        }
+        .feedback-line.success { color: var(--accent-green); }
+        .feedback-line.error { color: var(--accent-red); }
+        .feedback-line.info { color: var(--accent-blue); }
+        .feedback-line.warn { color: var(--accent-yellow); }
+        .feedback-line.loading { color: var(--text-secondary); }
+        
+        /* Sections */
+        .section { margin-bottom: 32px; }
+        .section-title {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 16px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        /* Model Cards */
+        .models-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            gap: 16px;
+        }
+        .model-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: var(--shadow);
+        }
+        .model-card h3 { font-size: 15px; margin-bottom: 8px; word-break: break-all; }
+        .model-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 12px 0; }
+        .model-stat {
+            background: rgba(255,255,255,0.03);
+            padding: 8px 12px;
+            border-radius: 6px;
+        }
+        .model-stat .label { font-size: 11px; color: var(--text-muted); }
+        .model-stat .value { font-size: 14px; font-weight: 600; }
+        .model-load-progress {
+            display: flex; align-items: center; gap: 14px;
+            background: rgba(88,166,255,0.08); border: 1px solid var(--accent-blue);
+            border-radius: 8px; padding: 14px 18px; margin-bottom: 16px;
+        }
+        .model-load-progress .loading-spinner { width: 20px; height: 20px; flex-shrink: 0; }
+        .model-load-progress-text { display: flex; flex-direction: column; gap: 2px; }
+        #modelLoadTitle { font-size: 14px; font-weight: 600; color: var(--accent-blue); }
+        .model-load-elapsed { font-size: 12px; color: var(--text-secondary); }
+        .model-card.loading { opacity: 0.6; pointer-events: none; }
+        .model-card { position: relative; }
+        .model-badge-active {
+            position: absolute; top: 16px; right: 16px;
+            background: rgba(63,185,80,0.15); color: var(--accent-green);
+            padding: 4px 10px; border-radius: 20px; font-size: 11px; font-weight: 600; text-transform: uppercase;
+        }
+        .model-actions { display: flex; gap: 8px; margin-top: 12px; }
+        .model-settings-panel {
+            display: none; margin-top: 16px; padding-top: 16px;
+            border-top: 1px solid var(--border);
+        }
+        .model-settings-panel.open { display: block; }
+        .settings-row {
+            display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px;
+        }
+        .settings-field { display: flex; flex-direction: column; gap: 4px; }
+        .settings-field label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
+        .settings-field input[type="number"], .settings-field input[type="text"] {
+            padding: 8px 10px; background: var(--bg-primary); border: 1px solid var(--border);
+            border-radius: 6px; color: var(--text-primary); font-size: 13px;
+        }
+        .settings-field input:focus { outline: none; border-color: var(--accent-blue); }
+        .settings-field.full-width { grid-column: 1 / -1; }
+        .toggle-row { display: flex; align-items: center; justify-content: space-between; padding: 6px 0; }
+        .toggle-row label { font-size: 13px; color: var(--text-primary); }
+        .toggle-switch { position: relative; width: 38px; height: 22px; flex-shrink: 0; }
+        .toggle-switch input { opacity: 0; width: 0; height: 0; }
+        .toggle-slider {
+            position: absolute; cursor: pointer; inset: 0;
+            background: var(--border); border-radius: 22px; transition: 0.2s;
+        }
+        .toggle-slider:before {
+            content: ""; position: absolute; height: 16px; width: 16px; left: 3px; bottom: 3px;
+            background: var(--text-primary); border-radius: 50%; transition: 0.2s;
+        }
+        .toggle-switch input:checked + .toggle-slider { background: var(--accent-green); }
+        .toggle-switch input:checked + .toggle-slider:before { transform: translateX(16px); }
+        
+        /* Benchmark */
+        .benchmark-results {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 16px;
+            margin-top: 16px;
+        }
+        .benchmark-metric {
+            display: inline-block;
+            margin-right: 24px;
+            padding: 12px;
+            background: rgba(255,255,255,0.03);
+            border-radius: 6px;
+            min-width: 120px;
+        }
+        .benchmark-metric .value { font-size: 24px; font-weight: 700; }
+        .benchmark-metric .label { font-size: 11px; color: var(--text-muted); }
+        
+        /* Optimizer */
+        .optimizer-status {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 16px;
+            margin-top: 16px;
+        }
+        .optimizer-progress {
+            height: 8px;
+            background: var(--border);
+            border-radius: 4px;
+            margin: 12px 0;
+            overflow: hidden;
+        }
+        .optimizer-progress-bar {
+            height: 100%;
+            background: linear-gradient(90deg, var(--accent-blue), var(--accent-purple));
+            border-radius: 4px;
+            transition: width 0.3s ease;
+        }
+        
+        /* Logs */
+        .log-viewer {
+            background: #000;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 12px;
+            font-family: 'Cascadia Code', 'Fira Code', monospace;
+            font-size: 12px;
+            max-height: 400px;
+            overflow-y: auto;
+            line-height: 1.6;
+        }
+        .log-entry { padding: 1px 0; }
+        .log-entry.error { color: var(--accent-red); }
+        .log-entry.warn { color: var(--accent-yellow); }
+        .log-entry.info { color: var(--accent-cyan); }
+        
+        /* Chat */
+        .chat-container {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 16px;
+        }
+        .chat-messages {
+            max-height: 400px;
+            overflow-y: auto;
+            margin-bottom: 16px;
+        }
+        .chat-message { margin-bottom: 12px; padding: 12px; border-radius: 8px; }
+        .chat-message.user { background: rgba(88,166,255,0.1); border-left: 3px solid var(--accent-blue); }
+        .chat-message.assistant { background: rgba(188,140,255,0.1); border-left: 3px solid var(--accent-purple); }
+        .msg-label { font-size: 11px; font-weight: 600; margin-bottom: 4px; }
+        .msg-content { font-size: 14px; white-space: pre-wrap; word-break: break-word; }
+        .chat-input-row { display: flex; gap: 8px; }
+        .chat-input {
+            flex: 1;
+            padding: 10px;
+            background: var(--bg-primary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text-primary);
+            font-size: 14px;
+        }
+        .chat-input:focus { outline: none; border-color: var(--accent-blue); }
+        
+        /* Loading spinner */
+        .loading-spinner {
+            display: inline-block;
+            width: 14px;
+            height: 14px;
+            border: 2px solid var(--text-muted);
+            border-top-color: var(--accent-blue);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        
+        /* Tabs */
+        .tabs { display: flex; gap: 4px; margin-bottom: 24px; border-bottom: 1px solid var(--border); padding-bottom: 0; overflow-x: auto; }
+        .tab {
+            padding: 10px 20px;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            color: var(--text-secondary);
+            transition: all 0.2s;
+            font-size: 14px;
+            white-space: nowrap;
+        }
+        .tab:hover { color: var(--text-primary); }
+        .tab.active {
+            color: var(--accent-blue);
+            border-bottom-color: var(--accent-blue);
+            font-weight: 600;
+        }
+        .tab-content { display: none; }
+
+        /* Service card status accent */
+        .service-card { border-left: 3px solid var(--border); }
+        .service-card.is-running { border-left-color: var(--accent-green); }
+        .service-card.is-stopped { border-left-color: var(--accent-red); }
+
+        /* GPU card */
+        .gpu-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 16px;
+            box-shadow: var(--shadow);
+        }
+        .gpu-card .gpu-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px; }
+        .gpu-card .gpu-name { font-size: 13px; color: var(--text-secondary); }
+        .gpu-card .gpu-temp { font-size: 13px; font-weight: 600; }
+        .gpu-bar-track { height: 10px; background: var(--border); border-radius: 5px; overflow: hidden; margin-bottom: 8px; }
+        .gpu-bar-fill { height: 100%; border-radius: 5px; transition: width 0.4s ease, background 0.4s ease; background: var(--accent-green); }
+        .gpu-bar-fill.warn { background: var(--accent-yellow); }
+        .gpu-bar-fill.crit { background: var(--accent-red); }
+        .gpu-meta-row { display: flex; justify-content: space-between; font-size: 12px; color: var(--text-secondary); }
+        .gpu-unavailable { color: var(--text-muted); font-size: 13px; }
+
+        /* Scripts tab */
+        .script-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 18px;
+            margin-bottom: 16px;
+        }
+        .script-card h3 { font-size: 15px; margin-bottom: 4px; }
+        .script-card .script-desc { font-size: 12px; color: var(--text-secondary); margin-bottom: 12px; }
+        .script-card .script-form { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; }
+        .script-card .script-form input, .script-card .script-form select {
+            padding: 8px 10px; background: var(--bg-primary); border: 1px solid var(--border);
+            border-radius: 6px; color: var(--text-primary); font-size: 13px;
+        }
+        .script-run-status { font-size: 12px; color: var(--text-secondary); margin-bottom: 8px; min-height: 16px; }
+        .script-output {
+            background: #000; border: 1px solid var(--border); border-radius: 6px; padding: 10px;
+            font-family: 'Cascadia Code', 'Fira Code', monospace; font-size: 12px; white-space: pre-wrap;
+            max-height: 260px; overflow-y: auto; display: none; line-height: 1.5;
+        }
+        .script-output.visible { display: block; }
+        .script-output .err-line { color: var(--accent-red); }
+        #screenshotPreview { max-width: 100%; border-radius: 8px; border: 1px solid var(--border); margin-top: 10px; display: none; }
+        #screenshotPreview.visible { display: block; }
+        .tab-content.active { display: block; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🤖 AI Workspace Dashboard</h1>
+        <div class="header-actions">
+            <button class="btn btn-sm" onclick="refreshAll()">🔄 Refresh</button>
+        </div>
+    </div>
+    
+    <div class="dashboard">
+        <!-- Tabs -->
+        <div class="tabs">
+            <div class="tab active" data-tab="services" onclick="switchTab('services')">Services</div>
+            <div class="tab" data-tab="models" onclick="switchTab('models')">Models</div>
+            <div class="tab" data-tab="benchmark" onclick="switchTab('benchmark')">Benchmark</div>
+            <div class="tab" data-tab="optimizer" onclick="switchTab('optimizer')">Auto Optimizer</div>
+            <div class="tab" data-tab="scripts" onclick="switchTab('scripts')">Scripts</div>
+            <div class="tab" data-tab="chat" onclick="switchTab('chat')">Chat</div>
+            <div class="tab" data-tab="logs" onclick="switchTab('logs')">Logs</div>
+        </div>
+        
+        <!-- Feedback Area -->
+        <div class="feedback-area" id="feedbackArea">
+            <div class="feedback-title">Activity Log</div>
+            <div id="feedbackLines">
+                <div class="feedback-line info">Dashboard ready. Click Refresh or a service button to get started.</div>
+            </div>
+        </div>
+        
+        <!-- Services Tab -->
+        <div class="tab-content active" id="tab-services">
+            <div class="section">
+                <div class="section-title">⚡ Service Status</div>
+                <div class="services-grid" id="servicesGrid">
+                    <div class="service-card">
+                        <div class="service-header">
+                            <span class="service-name">Loading...</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="section">
+                <div class="section-title">📊 System Resources</div>
+                <div class="status-bar" id="systemBar">
+                    <div class="status-card">
+                        <div class="label">CPU</div>
+                        <div class="value status-blue" id="cpuValue">--</div>
+                        <div class="detail" id="cpuDetail">Loading...</div>
+                    </div>
+                    <div class="status-card">
+                        <div class="label">Memory</div>
+                        <div class="value status-blue" id="ramValue">--</div>
+                        <div class="detail" id="ramDetail">Loading...</div>
+                    </div>
+                    <div class="status-card">
+                        <div class="label">Disk (C:)</div>
+                        <div class="value status-green" id="diskValue">--</div>
+                        <div class="detail" id="diskDetail">Loading...</div>
+                    </div>
+                    <div class="status-card">
+                        <div class="label">Active Model GPU Layers</div>
+                        <div class="value status-green" id="gpuLayers">--</div>
+                        <div class="detail" id="gpuLayersDetail">Loading...</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="section">
+                <div class="section-title">🎮 GPU</div>
+                <div id="gpuCard" class="gpu-card">
+                    <div class="gpu-unavailable">Loading...</div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Models Tab -->
+        <div class="tab-content" id="tab-models">
+            <div class="section">
+                <div class="section-title">📦 Available Models</div>
+                <p style="color: var(--text-secondary); margin-bottom: 16px;">
+                    Scanned from C:\AI\models. Click a model to edit its startup parameters, or Load to switch to it.
+                </p>
+                <div id="modelLoadProgress" class="model-load-progress" style="display:none;">
+                    <div class="loading-spinner"></div>
+                    <div class="model-load-progress-text">
+                        <div id="modelLoadTitle">Loading model...</div>
+                        <div id="modelLoadElapsed" class="model-load-elapsed">0s elapsed</div>
+                    </div>
+                </div>
+                <div class="models-grid" id="modelsGrid">
+                    <div class="model-card"><h3>Loading...</h3></div>
+                </div>
+            </div>
+        </div>
+
+        
+        <!-- Benchmark Tab -->
+        <div class="tab-content" id="tab-benchmark">
+            <div class="section">
+                <div class="section-title">📏 Quick Benchmark</div>
+                <p style="color: var(--text-secondary); margin-bottom: 16px;">
+                    Run 3 inference tests to measure your current generation speed in tokens/sec.
+                </p>
+                <button class="btn btn-primary" onclick="runQuickBenchmark()" id="benchmarkBtn">
+                    ▶ Run 3-Run Benchmark
+                </button>
+                <div id="benchmarkResults" style="display:none; margin-top: 16px;">
+                    <div class="benchmark-results">
+                        <div class="benchmark-metric">
+                            <div class="value status-green" id="avgTps">--</div>
+                            <div class="label">Avg Tokens/Sec</div>
+                        </div>
+                        <div class="benchmark-metric">
+                            <div class="value" id="maxTps" style="color: var(--accent-green);">--</div>
+                            <div class="label">Best Tokens/Sec</div>
+                        </div>
+                        <div class="benchmark-metric">
+                            <div class="value" id="minTps" style="color: var(--accent-yellow);">--</div>
+                            <div class="label">Worst Tokens/Sec</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Optimizer Tab -->
+        <div class="tab-content" id="tab-optimizer">
+            <div class="section">
+                <div class="section-title">🔬 Auto-Optimizer</div>
+                <p style="color: var(--text-secondary); margin-bottom: 16px;">
+                    Not yet available for the native (Docker-free) llama-server setup -- this used to benchmark
+                    configurations via temporary Docker containers, and hasn't been rewritten for native
+                    llama-server.exe processes yet. Tune parameters manually in the Models tab instead.
+                </p>
+                <button class="btn" onclick="runOptimizer('quick')" id="quickOptBtn">
+                    Check status
+                </button>
+                <div id="optimizerStatus" style="display:none; margin-top: 16px;">
+                    <div class="optimizer-status">
+                        <div id="optCurrentTest" style="font-size: 13px; color: var(--text-secondary);"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Scripts Tab -->
+        <div class="tab-content" id="tab-scripts">
+            <div class="section">
+                <div class="section-title">🧰 Scripts</div>
+                <p style="color: var(--text-secondary); margin-bottom: 16px;">
+                    A curated set of the repo's utility scripts. Quick ones (Diagnostics, window listing,
+                    screenshot, launch/focus) run and return output immediately. Slow ones (Update Stack,
+                    Model Compare's compare/quick) run in the background and restart llama-server one or
+                    more times -- their output is tailed live below once started. Not every script in the
+                    repo is here on purpose: setup.ps1 and start.ps1/stop.ps1 prompt interactively or
+                    duplicate the Services tab's own controls, and windows-control.ps1's raw mouse/type/key
+                    actions are left to cptr, since a misclick here would send real keystrokes to whatever
+                    window happens to have focus.
+                </p>
+                <div id="scriptsGrid"><div class="script-card">Loading...</div></div>
+            </div>
+        </div>
+
+        <!-- Chat Tab -->
+        <div class="tab-content" id="tab-chat">
+            <div class="section">
+                <div class="section-title">💬 Quick Chat</div>
+                <div class="chat-container">
+                    <div class="chat-messages" id="chatMessages"></div>
+                    <div class="chat-input-row">
+                        <input type="text" class="chat-input" id="chatInput" 
+                               placeholder="Type a message..." 
+                               onkeydown="if(event.key==='Enter') sendChat()">
+                        <button class="btn btn-primary" onclick="sendChat()">Send</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Logs Tab -->
+        <div class="tab-content" id="tab-logs">
+            <div class="section">
+                <div class="section-title">📋 Log Viewer</div>
+                <div style="margin-bottom: 12px;">
+                    <select id="logSelect" class="chat-input" style="width: auto; display: inline-block;">
+                        <option value="llama.stdout.log">llama-server stdout</option>
+                        <option value="llama.stderr.log">llama-server stderr</option>
+                    </select>
+                    <span style="font-size:12px; color:var(--text-muted); margin-left:8px;">cptr runs in its own visible console window (see its startup terminal for output), not a log file.</span>
+                    <button class="btn btn-sm" onclick="loadLogs()" style="margin-left: 8px;">Load</button>
+                    <button class="btn btn-sm" onclick="refreshLogViewer()">🔄 Refresh</button>
+                </div>
+                <div class="log-viewer" id="logViewer">
+                    <div class="log-entry info">Select a log file and click Load.</div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        const DASHBOARD_API = 'http://127.0.0.1:9090';
+        const LLAMA_API = 'http://127.0.0.1:10000/v1';
+        const KV_CACHE_TYPES = ['f16','q8_0','q4_0','q4_1','q5_0','q5_1'];
+        
+        let chatHistory = [];
+        let logRefreshInterval = null;
+        let benchmarkRunning = false;
+        
+        // ---- Tab Switching ----
+        function switchTab(tabName) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+            document.querySelector(`[data-tab="${tabName}"]`).classList.add('active');
+            document.getElementById(`tab-${tabName}`).classList.add('active');
+            
+            if (tabName === 'models') {
+                loadModelsList();
+            }
+            if (tabName === 'scripts') {
+                loadScriptsCatalog();
+            }
+            // Start log auto-refresh when logs tab is active
+            if (tabName === 'logs') {
+                logRefreshInterval = setInterval(refreshLogViewer, 3000);
+                loadLogs();
+            } else {
+                clearInterval(logRefreshInterval);
+            }
+        }
+        
+        // ---- Feedback ----
+        function addFeedback(text, type = 'info') {
+            const container = document.getElementById('feedbackLines');
+            const div = document.createElement('div');
+            div.className = `feedback-line ${type}`;
+            div.textContent = `[${new Date().toLocaleTimeString()}] ${text}`;
+            container.appendChild(div);
+            // Auto-scroll
+            const area = document.getElementById('feedbackArea');
+            area.scrollTop = area.scrollHeight;
+        }
+        
+        function clearFeedback() {
+            document.getElementById('feedbackLines').innerHTML = '';
+        }
+        
+        // ---- Services ----
+        async function refreshAll() {
+            addFeedback('Refreshing status...', 'loading');
+            try {
+                const resp = await fetch(`${DASHBOARD_API}/api/status`);
+                const data = await resp.json();
+                renderServices(data.services);
+                renderSystemInfo(data.system);
+                renderGpuCard(data.gpu);
+                addFeedback('Status refreshed', 'success');
+            } catch (e) {
+                addFeedback(`API error: ${e.message}. Is dashboard-server running?`, 'error');
+            }
+        }
+
+        function renderGpuCard(gpu) {
+            const card = document.getElementById('gpuCard');
+            if (!gpu) {
+                card.innerHTML = '<div class="gpu-unavailable">nvidia-smi unavailable.</div>';
+                return;
+            }
+            const pct = gpu.totalMiB ? Math.round((gpu.usedMiB / gpu.totalMiB) * 100) : 0;
+            const barClass = gpu.freeMiB < 1000 ? 'crit' : (gpu.freeMiB < 2000 ? 'warn' : '');
+            const tempColor = gpu.tempC >= 85 ? 'var(--accent-red)' : (gpu.tempC >= 75 ? 'var(--accent-yellow)' : 'var(--accent-green)');
+            card.innerHTML = `
+                <div class="gpu-head">
+                    <span class="gpu-name">${escapeHtml(gpu.name || 'GPU')}</span>
+                    <span class="gpu-temp" style="color:${tempColor}">${gpu.tempC}&deg;C &middot; ${gpu.utilizationPercent}% util</span>
+                </div>
+                <div class="gpu-bar-track"><div class="gpu-bar-fill ${barClass}" style="width:${pct}%"></div></div>
+                <div class="gpu-meta-row">
+                    <span>${gpu.usedMiB} MiB / ${gpu.totalMiB} MiB used</span>
+                    <span>${gpu.freeMiB} MiB free</span>
+                </div>
+            `;
+        }
+
+        function renderServices(services) {
+            const grid = document.getElementById('servicesGrid');
+            const serviceList = [
+                { name: 'llama-server', port: 10000, url: 'http://127.0.0.1:10000', desc: 'LLM inference engine', icon: '🧠' },
+                { name: 'cptr', port: 8000, url: 'http://127.0.0.1:8000', desc: 'Agent controller / MCP server', icon: '🕹️' },
+                { name: 'oura-mcp', port: null, url: null, desc: 'Personal health data MCP server', icon: '💍' },
+            ];
+
+            let html = '';
+            for (const svc of serviceList) {
+                const svcData = services[svc.name] || { running: false };
+                const status = svcData.running;
+                const badgeClass = status ? 'badge-running' : 'badge-stopped';
+                const statusText = status ? 'Running' : 'Stopped';
+                const port = svc.port || svcData.port || '--';
+                const url = svc.url || (svcData.port ? `http://127.0.0.1:${svcData.port}` : null);
+
+                html += `
+                    <div class="service-card ${status ? 'is-running' : 'is-stopped'}" data-service="${svc.name}">
+                        <div class="service-header">
+                            <span class="service-name">${svc.icon} ${svc.name}</span>
+                            <span class="service-badge ${badgeClass}">${statusText}</span>
+                        </div>
+                        <div style="font-size:12px;color:var(--text-secondary);margin:-8px 0 8px;">${svc.desc}</div>
+                        <div class="service-details">
+                            <div class="service-detail-row">
+                                <span>Port</span>
+                                <span>${port}</span>
+                            </div>
+                            <div class="service-detail-row">
+                                <span>URL</span>
+                                <span>${url ? `<a href="${url}" target="_blank" style="color:var(--accent-blue)">${url}</a>` : '--'}</span>
+                            </div>
+                            <div class="service-detail-row">
+                                <span>PID</span>
+                                <span>${svcData.pid || '--'}</span>
+                            </div>
+                            ${svc.name === 'oura-mcp' ? `
+                            <div class="service-detail-row">
+                                <span>Oura authorized</span>
+                                <span style="color:${svcData.authorized ? 'var(--accent-green)' : 'var(--accent-yellow)'}">${svcData.authorized ? 'Yes' : 'No'}</span>
+                            </div>` : ''}
+                            ${svcData.error ? `<div class="service-detail-row"><span style="color:var(--accent-red)">Error</span><span style="font-size:11px;color:var(--accent-red)">${svcData.error}</span></div>` : ''}
+                        </div>
+                        <div class="service-actions">
+                            ${status
+                                ? `<button class="btn btn-sm btn-danger" onclick="controlService('${svc.name}','stop')">■ Stop</button>`
+                                : `<button class="btn btn-sm btn-primary" onclick="controlService('${svc.name}','start')">▶ Start</button>`
+                            }
+                            <button class="btn btn-sm btn-warning" onclick="controlService('${svc.name}','restart')">↻ Restart</button>
+                            ${svc.name === 'llama-server' ? `<button class="btn btn-sm btn-info" onclick="listModels()">📦 Models</button>` : ''}
+                            ${svc.name === 'oura-mcp' && url ? `<button class="btn btn-sm" onclick="window.open('${url}/oauth/start','_blank')">🔗 Authorize</button>` : ''}
+                        </div>
+                    </div>
+                `;
+            }
+            grid.innerHTML = html;
+        }
+        
+        function renderSystemInfo(sys) {
+            if (!sys) return;
+            document.getElementById('cpuValue').textContent = sys.cores ? `${sys.cores}C/${sys.threads}T` : '--';
+            document.getElementById('cpuDetail').textContent = sys.cpu || '';
+            document.getElementById('ramValue').textContent = sys.ramGB ? `${sys.ramGB} GB` : '--';
+            
+            let memDetail = '';
+            if (sys.memoryUsedGB && sys.ramGB) {
+                memDetail = `${sys.memoryUsedGB} GB used (${sys.memoryPercent || '?'}%)`;
+            }
+            document.getElementById('ramDetail').textContent = memDetail || 'Loading...';
+            
+            document.getElementById('diskValue').textContent = sys.freeDiskGB ? `${sys.freeDiskGB} GB free` : '--';
+            document.getElementById('diskDetail').textContent = sys.freeDiskGB > 100 ? 'Plenty of space' : 'Check disk space';
+        }
+        
+        async function controlService(name, action) {
+            addFeedback(`${action}ing ${name}...`, 'loading');
+
+            // Update button state on this specific card (matched by data-service, not
+            // textContent -- the service name now has an icon prefix in the DOM).
+            const card = document.querySelector(`.service-card[data-service="${name}"]`);
+            if (card) {
+                const actions = card.querySelector('.service-actions');
+                actions.innerHTML = '<div class="loading-spinner"></div> ' + action + 'ing...';
+            }
+
+            try {
+                const resp = await fetch(`${DASHBOARD_API}/api/${action}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ service: name })
+                });
+                const data = await resp.json();
+
+                if (data.success) {
+                    addFeedback(`${data.message}`, 'success');
+                    if (action === 'start' || action === 'restart') {
+                        // Look up this service's actual port (oura-mcp's port can be
+                        // customized in oura.env) then wait for it to come up.
+                        let port = name === 'llama-server' ? 10000 : (name === 'cptr' ? 8000 : null);
+                        if (port === null) {
+                            try {
+                                const statusResp = await fetch(`${DASHBOARD_API}/api/status`);
+                                const statusData = await statusResp.json();
+                                port = statusData.services?.[name]?.port || null;
+                            } catch {}
+                        }
+                        const checkUrl = name === 'llama-server' ? `${LLAMA_API}/models` : `http://127.0.0.1:${port}/`;
+                        let waited = 0;
+                        while (waited < 90) {
+                            await new Promise(r => setTimeout(r, 2000));
+                            waited += 2;
+                            try {
+                                const testResp = await fetch(checkUrl, { signal: AbortSignal.timeout(2000) });
+                                if (testResp.ok) {
+                                    addFeedback(`${name} is responding on port ${port}!`, 'success');
+                                    break;
+                                }
+                            } catch {}
+                        }
+                    }
+                } else {
+                    addFeedback(`${name}: ${data.message}`, 'error');
+                }
+            } catch (e) {
+                addFeedback(`Error ${action}ing ${name}: ${e.message}`, 'error');
+            }
+            
+            // Refresh after delay
+            setTimeout(refreshAll, 2000);
+        }
+        
+        // ---- Models ----
+        async function listModels() {
+            addFeedback('Checking loaded models...', 'info');
+            try {
+                const resp = await fetch(`${LLAMA_API}/models`);
+                const data = await resp.json();
+                if (data.data && data.data.length > 0) {
+                    addFeedback(`Loaded models: ${data.data.map(m => m.id.split('\\').pop()).join(', ')}`, 'success');
+                } else {
+                    addFeedback('No models currently loaded', 'warn');
+                }
+            } catch (e) {
+                addFeedback(`Could not reach API: ${e.message}`, 'error');
+            }
+        }
+        
+        // ---- Benchmark ----
+        async function runQuickBenchmark() {
+            if (benchmarkRunning) return;
+            benchmarkRunning = true;
+            
+            const btn = document.getElementById('benchmarkBtn');
+            btn.disabled = true;
+            btn.textContent = '⏳ Running...';
+            
+            addFeedback('Starting benchmark (3 runs)...', 'info');
+            document.getElementById('benchmarkResults').style.display = 'block';
+            document.getElementById('avgTps').textContent = '--';
+            document.getElementById('maxTps').textContent = '--';
+            document.getElementById('minTps').textContent = '--';
+            
+            try {
+                // Check if llama is reachable
+                try {
+                    await fetch(`${LLAMA_API}/models`, { signal: AbortSignal.timeout(3000) });
+                } catch {
+                    addFeedback('llama-server not reachable. Start it first.', 'error');
+                    btn.disabled = false;
+                    btn.textContent = '▶ Run 3-Run Benchmark';
+                    benchmarkRunning = false;
+                    return;
+                }
+                
+                const prompt = "The quick brown fox jumps over the lazy dog. This is a standard benchmark prompt used to measure AI model inference speed. It contains enough tokens for meaningful timing data.";
+                const results = [];
+                
+                for (let i = 1; i <= 3; i++) {
+                    addFeedback(`Run ${i}/3...`, 'info');
+                    const sw = performance.now();
+                    
+                    try {
+                        const resp = await fetch(`${LLAMA_API}/chat/completions`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                model: 'default',
+                                messages: [{ role: 'user', content: prompt }],
+                                max_tokens: 256,
+                                temperature: 0.7,
+                                stream: false
+                            })
+                        });
+                        const data = await resp.json();
+                        const elapsed = performance.now() - sw;
+                        
+                        if (data.usage && data.usage.completion_tokens > 0) {
+                            const tps = (data.usage.completion_tokens / (elapsed / 1000)).toFixed(2);
+                            results.push(parseFloat(tps));
+                            addFeedback(`  Run ${i}: ${tps} tokens/sec (${data.usage.completion_tokens} tokens in ${elapsed.toFixed(0)}ms)`, 'success');
+                        } else {
+                            addFeedback(`  Run ${i}: No usage data`, 'error');
+                        }
+                    } catch (e) {
+                        addFeedback(`  Run ${i}: Error - ${e.message}`, 'error');
+                    }
+                }
+                
+                if (results.length > 0) {
+                    const avg = (results.reduce((a,b) => a+b, 0) / results.length).toFixed(2);
+                    const max = Math.max(...results).toFixed(2);
+                    const min = Math.min(...results).toFixed(2);
+                    
+                    document.getElementById('avgTps').textContent = `${avg} t/s`;
+                    document.getElementById('maxTps').textContent = `${max} t/s`;
+                    document.getElementById('minTps').textContent = `${min} t/s`;
+                    
+                    addFeedback(`Benchmark complete. Avg: ${avg} t/s, Best: ${max} t/s`, 'success');
+                }
+            } catch (e) {
+                addFeedback(`Benchmark error: ${e.message}`, 'error');
+            }
+            
+            btn.disabled = false;
+            btn.textContent = '▶ Run 3-Run Benchmark';
+            benchmarkRunning = false;
+        }
+        
+        // ---- Optimizer ----
+        // The optimizer isn't implemented for the native (Docker-free) stack yet
+        // (see model-optimize.ps1) -- this just surfaces that status message.
+        async function runOptimizer(mode) {
+            const btn = document.getElementById('quickOptBtn');
+            btn.disabled = true;
+            document.getElementById('optimizerStatus').style.display = 'block';
+            document.getElementById('optCurrentTest').textContent = 'Checking...';
+
+            try {
+                const resp = await fetch(`${DASHBOARD_API}/api/optimizer`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ mode })
+                });
+                const data = await resp.json();
+                document.getElementById('optCurrentTest').textContent = data.message || 'Unknown response';
+                addFeedback(data.message || 'Optimizer check complete', data.success ? 'success' : 'info');
+            } catch (e) {
+                document.getElementById('optCurrentTest').textContent = `Error: ${e.message}`;
+                addFeedback(`Optimizer error: ${e.message}`, 'error');
+            }
+
+            btn.disabled = false;
+        }
+
+        // ---- Chat ----
+        async function sendChat() {
+            const input = document.getElementById('chatInput');
+            const msg = input.value.trim();
+            if (!msg) return;
+            input.value = '';
+            
+            addChatMessage('user', msg);
+            chatHistory.push({ role: 'user', content: msg });
+            
+            try {
+                const body = JSON.stringify({
+                    model: 'default',
+                    messages: [
+                        ...chatHistory.map(h => ({ role: h.role, content: h.content })),
+                    ],
+                    max_tokens: 500,
+                    temperature: 0.7,
+                    stream: false
+                });
+                
+                const resp = await fetch(`${LLAMA_API}/chat/completions`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: body
+                });
+                const data = await resp.json();
+                
+                if (data.choices && data.choices[0]) {
+                    const reply = data.choices[0].message.content;
+                    addChatMessage('assistant', reply);
+                    chatHistory.push({ role: 'assistant', content: reply });
+                } else {
+                    addChatMessage('assistant', 'No response from model.');
+                }
+            } catch (e) {
+                addChatMessage('assistant', `Error: ${e.message}\n\nMake sure llama-server is running with a model loaded.`);
+            }
+        }
+        
+        function addChatMessage(role, content) {
+            const container = document.getElementById('chatMessages');
+            const div = document.createElement('div');
+            div.className = `chat-message ${role}`;
+            const label = role === 'user' ? '👤 You' : '🤖 AI';
+            div.innerHTML = `<div class="msg-label">${label}</div><div class="msg-content">${escapeHtml(content)}</div>`;
+            container.appendChild(div);
+            container.scrollTop = container.scrollHeight;
+        }
+        
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+        
+        // ---- Logs ----
+        async function loadLogs() {
+            const logFile = document.getElementById('logSelect').value;
+            const viewer = document.getElementById('logViewer');
+            viewer.innerHTML = '<div class="log-entry">Loading...</div>';
+            
+            try {
+                const resp = await fetch(`${DASHBOARD_API}/api/logs?file=${encodeURIComponent(logFile)}`);
+                const data = await resp.json();
+                
+                if (data.error) {
+                    viewer.innerHTML = `<div class="log-entry warn">${escapeHtml(data.error)}</div>`;
+                    return;
+                }
+                
+                const lines = data.lines || [];
+                if (lines.length === 0) {
+                    viewer.innerHTML = '<div class="log-entry info">No log entries.</div>';
+                    return;
+                }
+                
+                viewer.innerHTML = lines.slice(-200).map(line => {
+                    let cls = '';
+                    if (line.toLowerCase().includes('error') || line.toLowerCase().includes('err ')) cls = 'error';
+                    else if (line.toLowerCase().includes('warn')) cls = 'warn';
+                    else if (line.toLowerCase().includes('info')) cls = 'info';
+                    return `<div class="log-entry ${cls}">${escapeHtml(line)}</div>`;
+                }).join('');
+                
+                // Auto-scroll to bottom
+                viewer.scrollTop = viewer.scrollHeight;
+            } catch (e) {
+                viewer.innerHTML = `<div class="log-entry error">Could not load logs: ${escapeHtml(e.message)}</div>`;
+            }
+        }
+        
+        
+        // ---- Models Tab ----
+        let modelsCache = [];
+        
+        async function loadModelsList() {
+            const grid = document.getElementById('modelsGrid');
+            try {
+                const resp = await fetch(`${DASHBOARD_API}/api/models`);
+                const data = await resp.json();
+                modelsCache = data.models || [];
+                renderModelsList();
+                updateActiveModelStat();
+            } catch (e) {
+                grid.innerHTML = `<div class="model-card"><h3 style="color:var(--accent-red)">Could not load models: ${escapeHtml(e.message)}</h3></div>`;
+            }
+        }
+
+        function updateActiveModelStat() {
+            const active = modelsCache.find(m => m.isActive);
+            const valueEl = document.getElementById('gpuLayers');
+            const detailEl = document.getElementById('gpuLayersDetail');
+            if (active) {
+                valueEl.textContent = active.settings.gpuLayers;
+                detailEl.textContent = `ctx ${active.settings.contextSize} · ${active.filename}`;
+            } else {
+                valueEl.textContent = '--';
+                detailEl.textContent = 'No active model';
+            }
+        }
+        
+        function fieldId(idx, key) { return `model_${idx}_${key}`; }
+        
+        function renderModelsList() {
+            const grid = document.getElementById('modelsGrid');
+            if (modelsCache.length === 0) {
+                grid.innerHTML = '<div class="model-card"><h3>No .gguf files found in C:\\AI\\models</h3></div>';
+                return;
+            }
+            
+            let html = '';
+            modelsCache.forEach((m, idx) => {
+                const s = m.settings;
+                html += `
+                    <div class="model-card">
+                        ${m.isActive ? '<div class="model-badge-active">Active</div>' : ''}
+                        <h3>${escapeHtml(m.filename)}</h3>
+                        <div class="model-stats">
+                            <div class="model-stat">
+                                <div class="label">Size</div>
+                                <div class="value">${m.sizeGB} GB</div>
+                            </div>
+                            <div class="model-stat">
+                                <div class="label">Modified</div>
+                                <div class="value" style="font-size:12px;">${escapeHtml(m.lastModified)}</div>
+                            </div>
+                            <div class="model-stat">
+                                <div class="label">Context</div>
+                                <div class="value">${s.contextSize}</div>
+                            </div>
+                            <div class="model-stat">
+                                <div class="label">GPU Layers</div>
+                                <div class="value">${s.gpuLayers}</div>
+                            </div>
+                            <div class="model-stat">
+                                <div class="label">KV Cache</div>
+                                <div class="value">${s.cacheTypeK}/${s.cacheTypeV}</div>
+                            </div>
+                        </div>
+                        <div class="model-actions">
+                            <button class="btn btn-sm" onclick="toggleModelSettings(${idx})">⚙ Settings</button>
+                            ${m.isActive
+                                ? `<button class="btn btn-sm" disabled>✓ Loaded</button>`
+                                : `<button class="btn btn-sm btn-primary" onclick="loadModel(${idx})">▶ Load Model</button>`
+                            }
+                        </div>
+                        <div class="model-settings-panel" id="panel_${idx}">
+                            <div class="settings-row">
+                                <div class="settings-field">
+                                    <label>Context Size</label>
+                                    <input type="number" id="${fieldId(idx,'contextSize')}" value="${s.contextSize}">
+                                </div>
+                                <div class="settings-field">
+                                    <label>GPU Layers (ngl)</label>
+                                    <input type="number" id="${fieldId(idx,'gpuLayers')}" value="${s.gpuLayers}">
+                                </div>
+                                <div class="settings-field">
+                                    <label>Parallel Slots</label>
+                                    <input type="number" id="${fieldId(idx,'parallel')}" value="${s.parallel}">
+                                </div>
+                                <div class="settings-field">
+                                    <label>Threads</label>
+                                    <input type="number" id="${fieldId(idx,'threads')}" value="${s.threads}">
+                                </div>
+                                <div class="settings-field">
+                                    <label>Batch Size</label>
+                                    <input type="number" id="${fieldId(idx,'batchSize')}" value="${s.batchSize}">
+                                </div>
+                                <div class="settings-field">
+                                    <label>Micro-batch Size</label>
+                                    <input type="number" id="${fieldId(idx,'ubatchSize')}" value="${s.ubatchSize}">
+                                </div>
+                                <div class="settings-field">
+                                    <label>RoPE Freq Base (0 = auto)</label>
+                                    <input type="number" id="${fieldId(idx,'ropeFreqBase')}" value="${s.ropeFreqBase}">
+                                </div>
+                                <div class="settings-field">
+                                    <label>RoPE Freq Scale (0 = auto)</label>
+                                    <input type="number" step="0.01" id="${fieldId(idx,'ropeFreqScale')}" value="${s.ropeFreqScale}">
+                                </div>
+                                <div class="settings-field">
+                                    <label>KV Cache Type (K)</label>
+                                    <select id="${fieldId(idx,'cacheTypeK')}" class="chat-input" style="padding:8px 10px; font-size:13px;">
+                                        ${KV_CACHE_TYPES.map(v => `<option value="${v}" ${s.cacheTypeK === v ? 'selected' : ''}>${v}</option>`).join('')}
+                                    </select>
+                                </div>
+                                <div class="settings-field">
+                                    <label>KV Cache Type (V)</label>
+                                    <select id="${fieldId(idx,'cacheTypeV')}" class="chat-input" style="padding:8px 10px; font-size:13px;">
+                                        ${KV_CACHE_TYPES.map(v => `<option value="${v}" ${s.cacheTypeV === v ? 'selected' : ''}>${v}</option>`).join('')}
+                                    </select>
+                                </div>
+                                <div class="settings-field full-width">
+                                    <label>Extra CLI Args (appended as-is, e.g. --mlock --no-mmap)</label>
+                                    <input type="text" id="${fieldId(idx,'extraArgs')}" value="${escapeHtml(s.extraArgs)}">
+                                </div>
+                            </div>
+                            <div class="toggle-row">
+                                <label>Flash Attention</label>
+                                <label class="toggle-switch">
+                                    <input type="checkbox" id="${fieldId(idx,'flashAttn')}" ${s.flashAttn ? 'checked' : ''}>
+                                    <span class="toggle-slider"></span>
+                                </label>
+                            </div>
+                            <div class="toggle-row">
+                                <label>Jinja Chat Templates</label>
+                                <label class="toggle-switch">
+                                    <input type="checkbox" id="${fieldId(idx,'jinja')}" ${s.jinja ? 'checked' : ''}>
+                                    <span class="toggle-slider"></span>
+                                </label>
+                            </div>
+                            <div class="model-actions">
+                                <button class="btn btn-sm btn-primary" onclick="saveModelSettings(${idx})">💾 Save Settings</button>
+                                ${m.isActive ? `<button class="btn btn-sm btn-warning" onclick="loadModel(${idx})">↻ Save &amp; Restart</button>` : ''}
+                            </div>
+                        </div>
+                    </div>
+                `;
+            });
+            grid.innerHTML = html;
+        }
+        
+        function toggleModelSettings(idx) {
+            const panel = document.getElementById(`panel_${idx}`);
+            panel.classList.toggle('open');
+        }
+        
+        function readSettingsFromForm(idx) {
+            return {
+                contextSize: parseInt(document.getElementById(fieldId(idx,'contextSize')).value, 10) || 16384,
+                gpuLayers: parseInt(document.getElementById(fieldId(idx,'gpuLayers')).value, 10) || 0,
+                parallel: parseInt(document.getElementById(fieldId(idx,'parallel')).value, 10) || 1,
+                threads: parseInt(document.getElementById(fieldId(idx,'threads')).value, 10) || 8,
+                batchSize: parseInt(document.getElementById(fieldId(idx,'batchSize')).value, 10) || 2048,
+                ubatchSize: parseInt(document.getElementById(fieldId(idx,'ubatchSize')).value, 10) || 512,
+                ropeFreqBase: parseFloat(document.getElementById(fieldId(idx,'ropeFreqBase')).value) || 0,
+                ropeFreqScale: parseFloat(document.getElementById(fieldId(idx,'ropeFreqScale')).value) || 0,
+                cacheTypeK: document.getElementById(fieldId(idx,'cacheTypeK')).value || 'f16',
+                cacheTypeV: document.getElementById(fieldId(idx,'cacheTypeV')).value || 'f16',
+                extraArgs: document.getElementById(fieldId(idx,'extraArgs')).value || '',
+                flashAttn: document.getElementById(fieldId(idx,'flashAttn')).checked,
+                jinja: document.getElementById(fieldId(idx,'jinja')).checked
+            };
+        }
+        
+        async function saveModelSettings(idx) {
+            const m = modelsCache[idx];
+            const settings = readSettingsFromForm(idx);
+            addFeedback(`Saving settings for ${m.filename}...`, 'loading');
+            try {
+                const resp = await fetch(`${DASHBOARD_API}/api/models/config`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ filename: m.filename, settings })
+                });
+                const data = await resp.json();
+                addFeedback(data.message || 'Settings saved', data.success ? 'success' : 'error');
+                if (data.success) { m.settings = settings; m.hasCustomConfig = true; }
+            } catch (e) {
+                addFeedback(`Error saving settings: ${e.message}`, 'error');
+            }
+        }
+        let modelLoadPollTimer = null;
+        let modelLoadElapsedTimer = null;
+
+        function stopModelLoadPolling() {
+            if (modelLoadPollTimer) { clearInterval(modelLoadPollTimer); modelLoadPollTimer = null; }
+            if (modelLoadElapsedTimer) { clearInterval(modelLoadElapsedTimer); modelLoadElapsedTimer = null; }
+            document.getElementById('modelLoadProgress').style.display = 'none';
+            document.querySelectorAll('.model-card.loading').forEach(c => c.classList.remove('loading'));
+        }
+
+        function pollModelLoad(filename) {
+            const banner = document.getElementById('modelLoadProgress');
+            const title = document.getElementById('modelLoadTitle');
+            const elapsedEl = document.getElementById('modelLoadElapsed');
+            title.textContent = `Loading ${filename}...`;
+            elapsedEl.textContent = '0s elapsed';
+            banner.style.display = 'flex';
+
+            const startedAt = Date.now();
+            const maxWaitMs = 10 * 60 * 1000;
+
+            modelLoadElapsedTimer = setInterval(() => {
+                const secs = Math.floor((Date.now() - startedAt) / 1000);
+                elapsedEl.textContent = `${secs}s elapsed`;
+            }, 1000);
+
+            modelLoadPollTimer = setInterval(async () => {
+                if (Date.now() - startedAt > maxWaitMs) {
+                    stopModelLoadPolling();
+                    addFeedback(`Still waiting on ${filename} after 10 minutes -- check the Logs tab for llama-server output.`, 'warn');
+                    loadModelsList();
+                    refreshAll();
+                    return;
+                }
+                try {
+                    const resp = await fetch(`${LLAMA_API}/models`, { signal: AbortSignal.timeout(3000) });
+                    if (resp.ok) {
+                        const data = await resp.json();
+                        const loadedId = data.data && data.data[0] && data.data[0].id || '';
+                        if (loadedId.includes(filename)) {
+                            stopModelLoadPolling();
+                            addFeedback(`${filename} is loaded and ready.`, 'success');
+                            loadModelsList();
+                            refreshAll();
+                        }
+                    }
+                } catch (e) {
+                    // still loading / not up yet -- keep polling
+                }
+            }, 3000);
+        }
+
+        async function loadModel(idx) {
+            const m = modelsCache[idx];
+            const settings = readSettingsFromForm(idx);
+            const card = document.querySelectorAll('.model-card')[idx];
+            if (card) card.classList.add('loading');
+            addFeedback(`Saving settings and loading ${m.filename}... this restarts llama-server and can take a while for large models.`, 'loading');
+            try {
+                await fetch(`${DASHBOARD_API}/api/models/config`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ filename: m.filename, settings })
+                });
+                const resp = await fetch(`${DASHBOARD_API}/api/models/load`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ filename: m.filename })
+                });
+                const data = await resp.json();
+                addFeedback(data.message || (data.success ? 'Model loading' : 'Failed to load model'), data.success ? 'success' : 'error');
+                if (data.success) {
+                    pollModelLoad(m.filename);
+                } else if (card) {
+                    card.classList.remove('loading');
+                }
+            } catch (e) {
+                addFeedback(`Error loading model: ${e.message}`, 'error');
+                if (card) card.classList.remove('loading');
+            }
+        }
+
+
+        // ---- Scripts ----
+        let scriptsCatalog = {};
+        const scriptPollers = {};
+
+        async function loadScriptsCatalog() {
+            const grid = document.getElementById('scriptsGrid');
+            try {
+                const resp = await fetch(`${DASHBOARD_API}/api/scripts/list`);
+                scriptsCatalog = await resp.json();
+                renderScriptsGrid();
+            } catch (e) {
+                grid.innerHTML = `<div class="script-card">Could not load scripts: ${escapeHtml(e.message)}</div>`;
+            }
+        }
+
+        function scriptArgFieldHtml(name, argName) {
+            const id = `script_${name}_${argName}`;
+            if (argName === 'command') {
+                return `<select id="${id}"><option value="list">list</option><option value="compare">compare</option><option value="quick">quick</option></select>`;
+            }
+            const placeholder = argName === 'prompt' ? 'prompt (for compare/quick)' : argName;
+            return `<input type="text" id="${id}" placeholder="${escapeHtml(placeholder)}" style="min-width:220px;">`;
+        }
+
+        function renderScriptsGrid() {
+            const grid = document.getElementById('scriptsGrid');
+            let html = '';
+            for (const [name, entry] of Object.entries(scriptsCatalog)) {
+                const inputs = (entry.argSpec || []).map(argName => scriptArgFieldHtml(name, argName)).join('');
+                html += `
+                    <div class="script-card" id="scriptcard_${name}">
+                        <h3>${escapeHtml(entry.label)}</h3>
+                        <div class="script-desc">${escapeHtml(entry.description)}</div>
+                        <div class="script-form">
+                            ${inputs}
+                            <button class="btn btn-sm btn-primary" onclick="runScript('${name}')" id="scriptbtn_${name}">▶ Run</button>
+                        </div>
+                        <div class="script-run-status" id="scriptstatus_${name}"></div>
+                        <div class="script-output" id="scriptoutput_${name}"></div>
+                        ${name === 'windows-screenshot' ? `<img id="screenshotPreview" alt="Latest screenshot">` : ''}
+                    </div>
+                `;
+            }
+            grid.innerHTML = html || '<div class="script-card">No scripts available.</div>';
+        }
+
+        async function runScript(name) {
+            const entry = scriptsCatalog[name];
+            if (!entry) return;
+            const btn = document.getElementById(`scriptbtn_${name}`);
+            const statusEl = document.getElementById(`scriptstatus_${name}`);
+            const outputEl = document.getElementById(`scriptoutput_${name}`);
+            btn.disabled = true;
+            statusEl.textContent = 'Starting...';
+            outputEl.classList.remove('visible');
+
+            const args = (entry.argSpec || []).map(argName => {
+                const input = document.getElementById(`script_${name}_${argName}`);
+                return input ? input.value : '';
+            });
+
+            try {
+                const resp = await fetch(`${DASHBOARD_API}/api/scripts/run`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name, args })
+                });
+                const data = await resp.json();
+
+                if (data.mode === 'sync') {
+                    btn.disabled = false;
+                    statusEl.textContent = data.success ? 'Done.' : 'Failed (see output).';
+                    outputEl.textContent = data.output || '(no output)';
+                    outputEl.classList.add('visible');
+                    addFeedback(`${entry.label}: ${data.success ? 'done' : 'failed'}`, data.success ? 'success' : 'error');
+                    if (name === 'windows-screenshot' && data.success) refreshScreenshotPreview();
+                } else if (data.mode === 'background' && data.success) {
+                    statusEl.textContent = `Running in background (PID info: ${data.message || ''})`;
+                    outputEl.classList.add('visible');
+                    pollScriptRun(name, data.runId, btn, statusEl, outputEl);
+                } else {
+                    btn.disabled = false;
+                    statusEl.textContent = data.message || 'Failed to start.';
+                    addFeedback(`${entry.label}: ${data.message || 'failed to start'}`, 'error');
+                }
+            } catch (e) {
+                btn.disabled = false;
+                statusEl.textContent = `Error: ${e.message}`;
+            }
+        }
+
+        function pollScriptRun(name, runId, btn, statusEl, outputEl) {
+            if (scriptPollers[name]) clearInterval(scriptPollers[name]);
+            scriptPollers[name] = setInterval(async () => {
+                try {
+                    const resp = await fetch(`${DASHBOARD_API}/api/scripts/status?runId=${encodeURIComponent(runId)}`);
+                    const data = await resp.json();
+                    if (!data.success) {
+                        clearInterval(scriptPollers[name]);
+                        statusEl.textContent = data.message || 'Lost track of this run.';
+                        btn.disabled = false;
+                        return;
+                    }
+                    const out = (data.output || []).join('\n');
+                    const err = (data.errorOutput || []).filter(Boolean);
+                    outputEl.innerHTML = escapeHtml(out) + (err.length ? '\n' + err.map(l => `<span class="err-line">${escapeHtml(l)}</span>`).join('\n') : '');
+                    outputEl.scrollTop = outputEl.scrollHeight;
+                    if (!data.running) {
+                        clearInterval(scriptPollers[name]);
+                        statusEl.textContent = `Finished (exit code ${data.exitCode}).`;
+                        btn.disabled = false;
+                        addFeedback(`${scriptsCatalog[name]?.label || name} finished (exit code ${data.exitCode})`, data.exitCode === 0 ? 'success' : 'error');
+                    } else {
+                        statusEl.textContent = 'Running...';
+                    }
+                } catch (e) {
+                    // transient poll failure -- keep trying until the interval is cleared
+                }
+            }, 2000);
+        }
+
+        function refreshScreenshotPreview() {
+            const img = document.getElementById('screenshotPreview');
+            if (!img) return;
+            img.src = `${DASHBOARD_API}/api/screenshot/latest?t=${Date.now()}`;
+            img.classList.add('visible');
+        }
+
+        function refreshLogViewer() {
+            if (document.querySelector('[data-tab="logs"]').classList.contains('active')) {
+                loadLogs();
+            }
+        }
+        
+        // ---- Init ----
+        refreshAll();
+        loadModelsList();
+        
+        // Auto-refresh status every 30 seconds
+        setInterval(refreshAll, 30000);
+    </script>
+</body>
+</html>

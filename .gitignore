@@ -1,0 +1,41 @@
+# Secrets
+.env
+*.env
+!*.env.example
+oura.env
+*.key
+*.pem
+
+# Nested git repos already tracked separately — do not vendor
+Personal-health-data/
+
+# Large binaries — never belong in git
+models/*.gguf
+models/archive/
+models/incoming/
+Tools/llama-native/
+
+# Local/runtime data, not source
+Backups/
+Cache/
+Data/
+Databases/
+Downloads/
+Logs/
+Workspace/Screenshots/
+
+# Conversation/session logs — personal, not project source
+.cptr/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Node
+node_modules/
+
+# OS cruft
+Thumbs.db
+.DS_Store

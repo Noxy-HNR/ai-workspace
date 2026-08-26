@@ -1,0 +1,1 @@
+Note: Config/models.json has inconsistent spacing between keys and values (e.g., "gpuLayers":  58 with extra spaces). Consider standardizing formatting for readability.
