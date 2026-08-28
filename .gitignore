@@ -8,6 +8,7 @@ oura.env
 
 # Nested git repos already tracked separately — do not vendor
 Personal-health-data/
+Projects/
 
 # Large binaries — never belong in git
 models/*.gguf
