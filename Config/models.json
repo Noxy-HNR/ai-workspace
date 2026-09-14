@@ -1,23 +1,8 @@
 ﻿{
     "models":  {
-                   "Ornith-1.5-9B-Q8_0.gguf":  {
-                                                   "contextSize":  65536,
-                                                   "gpuLayers":  999,
-                                                   "flashAttn":  true,
-                                                   "parallel":  1,
-                                                   "jinja":  true,
-                                                   "batchSize":  1024,
-                                                   "ubatchSize":  256,
-                                                   "ropeFreqBase":  0,
-                                                   "ropeFreqScale":  0,
-                                                   "threads":  8,
-                                                   "cacheTypeK":  "f16",
-                                                   "cacheTypeV":  "f16",
-                                                   "extraArgs":  ""
-                                               },
                    "Qwen3.8-27B-Uncensored-IQ3_M.gguf":  {
                                                              "contextSize":  20480,
-                                                             "gpuLayers":  58,
+                                                             "gpuLayers":  60,
                                                              "flashAttn":  true,
                                                              "parallel":  1,
                                                              "jinja":  true,
@@ -30,21 +15,6 @@
                                                              "cacheTypeV":  "q8_0",
                                                              "extraArgs":  ""
                                                          },
-                   "Qwen3.5-9B-UD-Q6_K_XL.gguf":  {
-                                                      "contextSize":  81920,
-                                                      "gpuLayers":  999,
-                                                      "flashAttn":  true,
-                                                      "parallel":  1,
-                                                      "jinja":  true,
-                                                      "batchSize":  1024,
-                                                      "ubatchSize":  256,
-                                                      "ropeFreqBase":  0,
-                                                      "ropeFreqScale":  0,
-                                                      "threads":  8,
-                                                      "cacheTypeK":  "f16",
-                                                      "cacheTypeV":  "f16",
-                                                      "extraArgs":  ""
-                                                  },
                    "medgemma-27b-it-Q4_K_M.gguf":  {
                                                        "contextSize":  32768,
                                                        "gpuLayers":  31,
@@ -60,8 +30,23 @@
                                                        "cacheTypeV":  "f16",
                                                        "extraArgs":  ""
                                                    },
+                   "Qwen3.5-9B-UD-Q6_K_XL.gguf":  {
+                                                      "contextSize":  114688,
+                                                      "gpuLayers":  999,
+                                                      "flashAttn":  true,
+                                                      "parallel":  1,
+                                                      "jinja":  true,
+                                                      "batchSize":  1024,
+                                                      "ubatchSize":  256,
+                                                      "ropeFreqBase":  0,
+                                                      "ropeFreqScale":  0,
+                                                      "threads":  8,
+                                                      "cacheTypeK":  "f16",
+                                                      "cacheTypeV":  "f16",
+                                                      "extraArgs":  ""
+                                                  },
                    "Qwen3.5-9B-Q4_K_M.gguf":  {
-                                                  "contextSize":  163840,
+                                                  "contextSize":  200704,
                                                   "gpuLayers":  999,
                                                   "flashAttn":  true,
                                                   "parallel":  1,
@@ -73,8 +58,23 @@
                                                   "threads":  8,
                                                   "cacheTypeK":  "f16",
                                                   "cacheTypeV":  "f16",
-                                                  "extraArgs":  "-lv 5, --log-prompts-dir C:\\\\AI\\\\logs\\\\llama-prompts"
-                                              }
+                                                  "extraArgs":  "-lv 5, --log-prompts-dir C:\\AI\\logs\\llama-prompts"
+                                              },
+                   "Ornith-1.5-9B-Q8_0.gguf":  {
+                                                   "contextSize":  98304,
+                                                   "gpuLayers":  999,
+                                                   "flashAttn":  true,
+                                                   "parallel":  1,
+                                                   "jinja":  true,
+                                                   "batchSize":  1024,
+                                                   "ubatchSize":  256,
+                                                   "ropeFreqBase":  0,
+                                                   "ropeFreqScale":  0,
+                                                   "threads":  8,
+                                                   "cacheTypeK":  "f16",
+                                                   "cacheTypeV":  "f16",
+                                                   "extraArgs":  ""
+                                               }
                },
-    "activeModel":  "Qwen3.5-9B-Q4_K_M.gguf"
+    "activeModel":  "Ornith-1.5-9B-Q8_0.gguf"
 }

@@ -197,6 +197,7 @@ function Start-LlamaNative {
 
     try {
         $p = Start-Process -FilePath $LlamaBin -ArgumentList $argList -WorkingDirectory (Split-Path $LlamaBin) -RedirectStandardOutput $stdOut -RedirectStandardError $stdErr -WindowStyle Hidden -PassThru
+        try { $p.PriorityClass = 'High' } catch {}
         Set-Content -Path $LlamaPidFile -Value $p.Id -Encoding UTF8
         return @{ success = $true; message = "llama-server starting natively (PID $($p.Id)). Loading $FileName..." }
     } catch {
