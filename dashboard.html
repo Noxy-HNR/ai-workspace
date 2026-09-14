@@ -6,21 +6,21 @@
     <title>AI Workspace Dashboard</title>
     <style>
         :root {
-            --bg-primary: #0d1117;
-            --bg-secondary: #161b22;
-            --bg-card: #1c2333;
-            --bg-card-hover: #1f2a3d;
-            --border: #30363d;
-            --text-primary: #e6edf3;
-            --text-secondary: #8b949e;
-            --text-muted: #6e7681;
-            --accent-blue: #58a6ff;
-            --accent-green: #3fb950;
+            --bg-primary: #0d1318;
+            --bg-secondary: #121c23;
+            --bg-card: #17232b;
+            --bg-card-hover: #1d2c35;
+            --border: #2a3943;
+            --text-primary: #eef4f5;
+            --text-secondary: #a4b4bf;
+            --text-muted: #899da9;
+            --accent-blue: #88baff;
+            --accent-green: #67d5b5;
             --accent-red: #f85149;
             --accent-yellow: #d29922;
             --accent-purple: #bc8cff;
             --accent-orange: #f0883e;
-            --accent-cyan: #39d2c0;
+            --accent-cyan: #67d5b5;
             --shadow: 0 2px 8px rgba(0,0,0,0.3);
             --shadow-lg: 0 4px 16px rgba(0,0,0,0.4);
         }
@@ -448,40 +448,122 @@
         #screenshotPreview { max-width: 100%; border-radius: 8px; border: 1px solid var(--border); margin-top: 10px; display: none; }
         #screenshotPreview.visible { display: block; }
         .tab-content.active { display: block; }
+
+        /* Workspace surfaces: restrained color, visible focus, flexible layouts. */
+        :root { color-scheme: dark; scrollbar-color:var(--border) var(--bg-primary); scrollbar-width:thin; }
+        body { font-size:14px; -webkit-font-smoothing:antialiased; }
+        .header { padding:18px max(24px,calc((100vw - 1320px)/2)); background:var(--bg-primary); gap:16px; }
+        .header h1 { display:flex; align-items:center; gap:12px; font-size:17px; letter-spacing:-.03em;
+            background:none; -webkit-text-fill-color:var(--text-primary); }
+        .brand-mark { display:inline-grid; place-items:center; width:34px; height:34px; border-radius:11px;
+            background:var(--accent-cyan); color:#102822; -webkit-text-fill-color:#102822; font-size:14px; font-weight:800; }
+        .header-actions .btn { background:transparent; }
+        .dashboard { max-width:1368px; padding:34px 24px 64px; }
+        .workspace-intro { display:flex; justify-content:space-between; align-items:center; gap:24px; margin-bottom:30px; }
+        .workspace-intro[hidden] { display:none; }
+        .eyebrow { color:var(--accent-cyan); font-size:10px; font-weight:700; letter-spacing:.16em; text-transform:uppercase; margin-bottom:8px; }
+        .workspace-intro h2 { font-size:clamp(25px,3vw,36px); font-weight:600; letter-spacing:-.045em; line-height:1.2; }
+        .workspace-intro p { color:var(--text-secondary); margin-top:10px; max-width:640px; }
+        .local-label { white-space:nowrap; border:1px solid var(--border); border-radius:999px; padding:7px 12px; color:var(--text-secondary); font-size:12px; }
+        .tabs { display:flex; gap:5px; padding:6px; margin-bottom:20px; background:var(--bg-secondary);
+            border:1px solid var(--border); border-radius:13px; overflow-x:auto; }
+        .tab { font:inherit; font-weight:550; padding:10px 18px; border:0; border-radius:8px; background:transparent;
+            color:var(--text-secondary); white-space:nowrap; cursor:pointer; flex-shrink:0; }
+        .tab:hover { color:var(--text-primary); background:var(--bg-card); }
+        .tab.active { background:var(--bg-card-hover); color:var(--accent-cyan); box-shadow:0 1px 3px #0003; border:0; }
+        .feedback-area { background:transparent; border:1px solid var(--border); border-radius:10px; padding:0; margin-bottom:28px; min-height:0; max-height:none; }
+        .feedback-title { cursor:pointer; padding:11px 16px; margin:0; color:var(--text-secondary); font-size:12px; font-weight:500; }
+        #feedbackLines { max-height:160px; overflow:auto; padding:0 16px 14px; font-size:12px; }
+        .section { margin-bottom:30px; }
+        .section-title { font-size:17px; font-weight:600; letter-spacing:-.025em; margin-bottom:16px; }
+        .services-grid,.models-grid { grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr)); gap:16px; }
+        .status-bar { gap:14px; grid-template-columns:repeat(auto-fit,minmax(min(100%,180px),1fr)); }
+        .service-card,.model-card,.status-card,.gpu-card,.script-card,.benchmark-results,.optimizer-status {
+            border-radius:15px; background:var(--bg-secondary); box-shadow:0 4px 18px #00000012; }
+        .service-card,.model-card,.script-card { padding:22px; border-width:1px; }
+        .service-card.is-running,.service-card.is-stopped { border-left-width:1px; border-color:var(--border); }
+        .service-card:hover,.model-card:hover { border-color:#425865; background:var(--bg-card); }
+        .service-name { font-size:16px; letter-spacing:-.02em; font-weight:600; }
+        .service-badge { font-size:10px; letter-spacing:.06em; border-radius:999px; padding:4px 9px; }
+        .status-card { padding:21px; }
+        .status-card .label { font-size:10px; letter-spacing:.1em; color:var(--text-secondary); }
+        .status-card .value { font-size:30px; font-weight:550; letter-spacing:-.045em; font-variant-numeric:tabular-nums; }
+        .status-card .detail { font-size:12px; line-height:1.5; }
+        .btn { min-height:36px; padding:8px 13px; border-radius:8px; font-family:inherit; font-weight:600; text-decoration:none; justify-content:center; }
+        .btn-sm { min-height:31px; padding:5px 11px; }
+        .btn-primary,.btn-primary:disabled { background:var(--accent-cyan); border-color:var(--accent-cyan); color:#102822; }
+        .btn-primary:hover:not(:disabled) { background:#8fe5cb; border-color:#8fe5cb; }
+        .btn-danger,.btn-danger:disabled { background:#f8514910; border-color:#f8514940; color:#ffada7; }
+        .btn-danger:hover:not(:disabled) { background:#f8514925; }
+        .btn-warning { background:#d2992215; border-color:#d2992250; color:#eed08a; }
+        .btn-info { background:#88baff15; border-color:#88baff45; color:#aecfff; }
+        .btn-info:hover { background:#88baff28; }
+        input,select,textarea { font:inherit; color-scheme:dark; min-width:0; }
+        input:not([type=checkbox]),select,textarea,.chat-input { border-radius:9px; background:var(--bg-primary); border:1px solid var(--border); }
+        :is(button,a,input,select,textarea,summary):focus-visible { outline:2px solid var(--accent-cyan); outline-offset:3px; }
+        .tabs { scrollbar-width:thin; }
+        .toggle-switch input:focus-visible + .toggle-slider { outline:2px solid var(--accent-cyan); outline-offset:3px; }
+        .chat-container { border-radius:16px; border:1px solid var(--border); overflow:hidden; background:var(--bg-secondary); padding:0; }
+        .chat-messages { background:transparent; height:clamp(220px,calc(100dvh - 430px),520px); max-height:none; min-height:220px; padding:24px; margin:0; }
+        .chat-messages:empty::before { content:'Start a conversation with your local model.'; display:block; color:var(--text-secondary); text-align:center; padding:70px 16px; }
+        .chat-message { border-radius:12px; padding:14px 18px; max-width:90%; overflow-wrap:anywhere; }
+        .chat-message.user { margin-left:auto; background:#67d5b510; border-color:var(--accent-cyan); }
+        .chat-input-row { padding:16px; background:var(--bg-secondary); border-top:1px solid var(--border); }
+        .chat-input { min-width:0; }
+        .log-viewer,.script-output { background:#0a1015; border-radius:12px; border:1px solid var(--border); line-height:1.75; }
+        .model-card h3,.script-card h3 { font-weight:600; letter-spacing:-.02em; overflow-wrap:anywhere; }
+        .model-params,.script-form { gap:12px; }
+        .gpu-card { padding:22px; }
+        .gpu-metrics { gap:18px; }
+        .section > p { max-width:780px; line-height:1.7; }
+        @media(max-width:650px) {
+            .header { padding:14px 16px; } .header h1 { font-size:15px; }
+            .dashboard { padding:24px 16px 48px; } .workspace-intro { align-items:flex-start; } .local-label { display:none; }
+            .tab { padding:9px 13px; } .service-card,.model-card,.script-card { padding:17px; }
+            .status-bar { grid-template-columns:repeat(2,minmax(0,1fr)); } .status-card { padding:15px; }
+            .status-card .value { font-size:25px; } .service-actions { flex-wrap:wrap; }
+            .benchmark-results { flex-wrap:wrap; } .gpu-metrics { grid-template-columns:repeat(2,minmax(0,1fr)); }
+        }
+        @media(prefers-reduced-motion:reduce) { *,*::before,*::after { animation:none!important; transition:none!important; scroll-behavior:auto!important; } }
     </style>
 </head>
 <body>
     <div class="header">
-        <h1>🤖 AI Workspace Dashboard</h1>
+        <h1><span class="brand-mark" aria-hidden="true">AI</span> Workspace</h1>
         <div class="header-actions">
-            <button class="btn btn-sm" onclick="refreshAll()">🔄 Refresh</button>
+            <button class="btn btn-sm" onclick="refreshAll()">Refresh</button>
         </div>
     </div>
     
     <div class="dashboard">
+        <section class="workspace-intro" aria-label="Workspace overview">
+            <div><div class="eyebrow">Local intelligence</div><h2>Your workspace, at a glance.</h2>
+            <p>Manage your models, monitor performance, and keep your tools running smoothly.</p></div>
+            <span class="local-label">On your machine</span>
+        </section>
         <!-- Tabs -->
-        <div class="tabs">
-            <div class="tab active" data-tab="services" onclick="switchTab('services')">Services</div>
-            <div class="tab" data-tab="models" onclick="switchTab('models')">Models</div>
-            <div class="tab" data-tab="benchmark" onclick="switchTab('benchmark')">Benchmark</div>
-            <div class="tab" data-tab="optimizer" onclick="switchTab('optimizer')">Auto Optimizer</div>
-            <div class="tab" data-tab="scripts" onclick="switchTab('scripts')">Scripts</div>
-            <div class="tab" data-tab="chat" onclick="switchTab('chat')">Chat</div>
-            <div class="tab" data-tab="logs" onclick="switchTab('logs')">Logs</div>
-        </div>
+        <nav class="tabs" aria-label="Workspace sections">
+            <button type="button" class="tab active" data-tab="services" aria-pressed="true" aria-controls="tab-services" onclick="switchTab('services')">Services</button>
+            <button type="button" class="tab" data-tab="models" aria-pressed="false" aria-controls="tab-models" onclick="switchTab('models')">Models</button>
+            <button type="button" class="tab" data-tab="benchmark" aria-pressed="false" aria-controls="tab-benchmark" onclick="switchTab('benchmark')">Benchmark</button>
+            <button type="button" class="tab" data-tab="optimizer" aria-pressed="false" aria-controls="tab-optimizer" onclick="switchTab('optimizer')">Auto Optimizer</button>
+            <button type="button" class="tab" data-tab="scripts" aria-pressed="false" aria-controls="tab-scripts" onclick="switchTab('scripts')">Scripts</button>
+            <button type="button" class="tab" data-tab="chat" aria-pressed="false" aria-controls="tab-chat" onclick="switchTab('chat')">Chat</button>
+            <button type="button" class="tab" data-tab="logs" aria-pressed="false" aria-controls="tab-logs" onclick="switchTab('logs')">Logs</button>
+        </nav>
         
         <!-- Feedback Area -->
-        <div class="feedback-area" id="feedbackArea">
-            <div class="feedback-title">Activity Log</div>
+        <details class="feedback-area" id="feedbackArea">
+            <summary class="feedback-title">Workspace activity</summary>
             <div id="feedbackLines">
                 <div class="feedback-line info">Dashboard ready. Click Refresh or a service button to get started.</div>
             </div>
-        </div>
+        </details>
         
         <!-- Services Tab -->
         <div class="tab-content active" id="tab-services">
             <div class="section">
-                <div class="section-title">⚡ Service Status</div>
+                <div class="section-title">Service Status</div>
                 <div class="services-grid" id="servicesGrid">
                     <div class="service-card">
                         <div class="service-header">
@@ -492,7 +574,7 @@
             </div>
             
             <div class="section">
-                <div class="section-title">📊 System Resources</div>
+                <div class="section-title">System Resources</div>
                 <div class="status-bar" id="systemBar">
                     <div class="status-card">
                         <div class="label">CPU</div>
@@ -518,7 +600,7 @@
             </div>
 
             <div class="section">
-                <div class="section-title">🎮 GPU</div>
+                <div class="section-title">GPU</div>
                 <div id="gpuCard" class="gpu-card">
                     <div class="gpu-unavailable">Loading...</div>
                 </div>
@@ -528,7 +610,7 @@
         <!-- Models Tab -->
         <div class="tab-content" id="tab-models">
             <div class="section">
-                <div class="section-title">📦 Available Models</div>
+                <div class="section-title">Available Models</div>
                 <p style="color: var(--text-secondary); margin-bottom: 16px;">
                     Scanned from C:\AI\models. Click a model to edit its startup parameters, or Load to switch to it.
                 </p>
@@ -549,7 +631,7 @@
         <!-- Benchmark Tab -->
         <div class="tab-content" id="tab-benchmark">
             <div class="section">
-                <div class="section-title">📏 Quick Benchmark</div>
+                <div class="section-title">Quick Benchmark</div>
                 <p style="color: var(--text-secondary); margin-bottom: 16px;">
                     Run 3 inference tests to measure your current generation speed in tokens/sec.
                 </p>
@@ -578,14 +660,13 @@
         <!-- Optimizer Tab -->
         <div class="tab-content" id="tab-optimizer">
             <div class="section">
-                <div class="section-title">🔬 Auto-Optimizer</div>
+                <div class="section-title">Auto-Optimizer</div>
                 <p style="color: var(--text-secondary); margin-bottom: 16px;">
-                    Not yet available for the native (Docker-free) llama-server setup -- this used to benchmark
-                    configurations via temporary Docker containers, and hasn't been rewritten for native
-                    llama-server.exe processes yet. Tune parameters manually in the Models tab instead.
+                    Automatic tuning is not available for native llama-server yet. Adjust parameters
+                    in Models, then use Benchmark to compare performance.
                 </p>
-                <button class="btn" onclick="runOptimizer('quick')" id="quickOptBtn">
-                    Check status
+                <button class="btn" onclick="switchTab('models')" id="quickOptBtn">
+                    Open model settings
                 </button>
                 <div id="optimizerStatus" style="display:none; margin-top: 16px;">
                     <div class="optimizer-status">
@@ -598,16 +679,10 @@
         <!-- Scripts Tab -->
         <div class="tab-content" id="tab-scripts">
             <div class="section">
-                <div class="section-title">🧰 Scripts</div>
+                <div class="section-title">Scripts</div>
                 <p style="color: var(--text-secondary); margin-bottom: 16px;">
-                    A curated set of the repo's utility scripts. Quick ones (Diagnostics, window listing,
-                    screenshot, launch/focus) run and return output immediately. Slow ones (Update Stack,
-                    Model Compare's compare/quick) run in the background and restart llama-server one or
-                    more times -- their output is tailed live below once started. Not every script in the
-                    repo is here on purpose: setup.ps1 and start.ps1/stop.ps1 prompt interactively or
-                    duplicate the Services tab's own controls, and windows-control.ps1's raw mouse/type/key
-                    actions are left to cptr, since a misclick here would send real keystrokes to whatever
-                    window happens to have focus.
+                    Run diagnostics and workspace utilities. Longer tasks show live output below.
+                    Stack updates and model comparisons may restart the model server.
                 </p>
                 <div id="scriptsGrid"><div class="script-card">Loading...</div></div>
             </div>
@@ -616,11 +691,11 @@
         <!-- Chat Tab -->
         <div class="tab-content" id="tab-chat">
             <div class="section">
-                <div class="section-title">💬 Quick Chat</div>
+                <div class="section-title">Quick Chat</div>
                 <div class="chat-container">
                     <div class="chat-messages" id="chatMessages"></div>
                     <div class="chat-input-row">
-                        <input type="text" class="chat-input" id="chatInput" 
+                        <input type="text" class="chat-input" id="chatInput" aria-label="Message to local model"
                                placeholder="Type a message..." 
                                onkeydown="if(event.key==='Enter') sendChat()">
                         <button class="btn btn-primary" onclick="sendChat()">Send</button>
@@ -632,15 +707,15 @@
         <!-- Logs Tab -->
         <div class="tab-content" id="tab-logs">
             <div class="section">
-                <div class="section-title">📋 Log Viewer</div>
+                <div class="section-title">Log Viewer</div>
                 <div style="margin-bottom: 12px;">
-                    <select id="logSelect" class="chat-input" style="width: auto; display: inline-block;">
+                    <select id="logSelect" aria-label="Log file" class="chat-input" style="width: auto; display: inline-block;">
                         <option value="llama.stdout.log">llama-server stdout</option>
                         <option value="llama.stderr.log">llama-server stderr</option>
                     </select>
                     <span style="font-size:12px; color:var(--text-muted); margin-left:8px;">cptr runs in its own visible console window (see its startup terminal for output), not a log file.</span>
                     <button class="btn btn-sm" onclick="loadLogs()" style="margin-left: 8px;">Load</button>
-                    <button class="btn btn-sm" onclick="refreshLogViewer()">🔄 Refresh</button>
+                    <button class="btn btn-sm" onclick="refreshLogViewer()">Refresh</button>
                 </div>
                 <div class="log-viewer" id="logViewer">
                     <div class="log-entry info">Select a log file and click Load.</div>
@@ -660,7 +735,8 @@
         
         // ---- Tab Switching ----
         function switchTab(tabName) {
-            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelector('.workspace-intro').hidden = tabName !== 'services';
+            document.querySelectorAll('.tab').forEach(t => { t.classList.remove('active'); t.setAttribute('aria-pressed', String(t.dataset.tab === tabName)); });
             document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
             document.querySelector(`[data-tab="${tabName}"]`).classList.add('active');
             document.getElementById(`tab-${tabName}`).classList.add('active');
@@ -682,6 +758,7 @@
         
         // ---- Feedback ----
         function addFeedback(text, type = 'info') {
+            if (type === 'error') document.getElementById('feedbackArea').open = true;
             const container = document.getElementById('feedbackLines');
             const div = document.createElement('div');
             div.className = `feedback-line ${type}`;
@@ -753,7 +830,7 @@
                 html += `
                     <div class="service-card ${status ? 'is-running' : 'is-stopped'}" data-service="${svc.name}">
                         <div class="service-header">
-                            <span class="service-name">${svc.icon} ${svc.name}</span>
+                            <span class="service-name">${svc.name}</span>
                             <span class="service-badge ${badgeClass}">${statusText}</span>
                         </div>
                         <div style="font-size:12px;color:var(--text-secondary);margin:-8px 0 8px;">${svc.desc}</div>
@@ -783,8 +860,8 @@
                                 : `<button class="btn btn-sm btn-primary" onclick="controlService('${svc.name}','start')">▶ Start</button>`
                             }
                             <button class="btn btn-sm btn-warning" onclick="controlService('${svc.name}','restart')">↻ Restart</button>
-                            ${svc.name === 'llama-server' ? `<button class="btn btn-sm btn-info" onclick="listModels()">📦 Models</button>` : ''}
-                            ${svc.name === 'oura-mcp' && url ? `<button class="btn btn-sm" onclick="window.open('${url}/oauth/start','_blank')">🔗 Authorize</button>` : ''}
+                            ${svc.name === 'llama-server' ? `<button class="btn btn-sm btn-info" onclick="listModels()">Models</button>` : ''}
+                            ${svc.name === 'oura-mcp' && url ? `<button class="btn btn-sm" onclick="window.open('${url}/oauth/start','_blank')">Authorize</button>` : ''}
                         </div>
                     </div>
                 `;
@@ -1158,63 +1235,63 @@
                         <div class="model-settings-panel" id="panel_${idx}">
                             <div class="settings-row">
                                 <div class="settings-field">
-                                    <label>Context Size</label>
+                                    <label for="${fieldId(idx,'contextSize')}">Context Size</label>
                                     <input type="number" id="${fieldId(idx,'contextSize')}" value="${s.contextSize}">
                                 </div>
                                 <div class="settings-field">
-                                    <label>GPU Layers (ngl)</label>
+                                    <label for="${fieldId(idx,'gpuLayers')}">GPU Layers (ngl)</label>
                                     <input type="number" id="${fieldId(idx,'gpuLayers')}" value="${s.gpuLayers}">
                                 </div>
                                 <div class="settings-field">
-                                    <label>Parallel Slots</label>
+                                    <label for="${fieldId(idx,'parallel')}">Parallel Slots</label>
                                     <input type="number" id="${fieldId(idx,'parallel')}" value="${s.parallel}">
                                 </div>
                                 <div class="settings-field">
-                                    <label>Threads</label>
+                                    <label for="${fieldId(idx,'threads')}">Threads</label>
                                     <input type="number" id="${fieldId(idx,'threads')}" value="${s.threads}">
                                 </div>
                                 <div class="settings-field">
-                                    <label>Batch Size</label>
+                                    <label for="${fieldId(idx,'batchSize')}">Batch Size</label>
                                     <input type="number" id="${fieldId(idx,'batchSize')}" value="${s.batchSize}">
                                 </div>
                                 <div class="settings-field">
-                                    <label>Micro-batch Size</label>
+                                    <label for="${fieldId(idx,'ubatchSize')}">Micro-batch Size</label>
                                     <input type="number" id="${fieldId(idx,'ubatchSize')}" value="${s.ubatchSize}">
                                 </div>
                                 <div class="settings-field">
-                                    <label>RoPE Freq Base (0 = auto)</label>
+                                    <label for="${fieldId(idx,'ropeFreqBase')}">RoPE Freq Base (0 = auto)</label>
                                     <input type="number" id="${fieldId(idx,'ropeFreqBase')}" value="${s.ropeFreqBase}">
                                 </div>
                                 <div class="settings-field">
-                                    <label>RoPE Freq Scale (0 = auto)</label>
+                                    <label for="${fieldId(idx,'ropeFreqScale')}">RoPE Freq Scale (0 = auto)</label>
                                     <input type="number" step="0.01" id="${fieldId(idx,'ropeFreqScale')}" value="${s.ropeFreqScale}">
                                 </div>
                                 <div class="settings-field">
-                                    <label>KV Cache Type (K)</label>
+                                    <label for="${fieldId(idx,'cacheTypeK')}">KV Cache Type (K)</label>
                                     <select id="${fieldId(idx,'cacheTypeK')}" class="chat-input" style="padding:8px 10px; font-size:13px;">
                                         ${KV_CACHE_TYPES.map(v => `<option value="${v}" ${s.cacheTypeK === v ? 'selected' : ''}>${v}</option>`).join('')}
                                     </select>
                                 </div>
                                 <div class="settings-field">
-                                    <label>KV Cache Type (V)</label>
+                                    <label for="${fieldId(idx,'cacheTypeV')}">KV Cache Type (V)</label>
                                     <select id="${fieldId(idx,'cacheTypeV')}" class="chat-input" style="padding:8px 10px; font-size:13px;">
                                         ${KV_CACHE_TYPES.map(v => `<option value="${v}" ${s.cacheTypeV === v ? 'selected' : ''}>${v}</option>`).join('')}
                                     </select>
                                 </div>
                                 <div class="settings-field full-width">
-                                    <label>Extra CLI Args (appended as-is, e.g. --mlock --no-mmap)</label>
+                                    <label for="${fieldId(idx,'extraArgs')}">Extra CLI Args (appended as-is, e.g. --mlock --no-mmap)</label>
                                     <input type="text" id="${fieldId(idx,'extraArgs')}" value="${escapeHtml(s.extraArgs)}">
                                 </div>
                             </div>
                             <div class="toggle-row">
-                                <label>Flash Attention</label>
+                                <label for="${fieldId(idx,'flashAttn')}">Flash Attention</label>
                                 <label class="toggle-switch">
                                     <input type="checkbox" id="${fieldId(idx,'flashAttn')}" ${s.flashAttn ? 'checked' : ''}>
                                     <span class="toggle-slider"></span>
                                 </label>
                             </div>
                             <div class="toggle-row">
-                                <label>Jinja Chat Templates</label>
+                                <label for="${fieldId(idx,'jinja')}">Jinja Chat Templates</label>
                                 <label class="toggle-switch">
                                     <input type="checkbox" id="${fieldId(idx,'jinja')}" ${s.jinja ? 'checked' : ''}>
                                     <span class="toggle-slider"></span>
@@ -1372,10 +1449,10 @@
         function scriptArgFieldHtml(name, argName) {
             const id = `script_${name}_${argName}`;
             if (argName === 'command') {
-                return `<select id="${id}"><option value="list">list</option><option value="compare">compare</option><option value="quick">quick</option></select>`;
+                return `<select id="${id}" aria-label="${escapeHtml(argName)}"><option value="list">list</option><option value="compare">compare</option><option value="quick">quick</option></select>`;
             }
             const placeholder = argName === 'prompt' ? 'prompt (for compare/quick)' : argName;
-            return `<input type="text" id="${id}" placeholder="${escapeHtml(placeholder)}" style="min-width:220px;">`;
+            return `<input type="text" id="${id}" aria-label="${escapeHtml(argName)}" placeholder="${escapeHtml(placeholder)}" style="min-width:220px;">`;
         }
 
         function renderScriptsGrid() {

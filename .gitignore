@@ -25,6 +25,19 @@ Downloads/
 Logs/
 Workspace/Screenshots/
 
+# Completed improvement workspace artifacts
+Workspace/project-improvements/original/
+Workspace/project-improvements/corrections-fixture/
+Workspace/project-improvements/fixture/
+Workspace/project-improvements/ui-previews/
+Workspace/project-improvements/edit_*.py
+Workspace/project-improvements/finish_ui.py
+Workspace/project-improvements/integrate_corrections.py
+Workspace/project-improvements/modernize_ui.py
+Workspace/project-improvements/polish_lecture.py
+Workspace/project-improvements/preview_*.py
+Workspace/project-improvements/update_docs.py
+
 # Conversation/session logs — personal, not project source
 .cptr/
 
