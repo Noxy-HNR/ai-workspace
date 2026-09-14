@@ -15,6 +15,7 @@ models/*.gguf
 models/archive/
 models/incoming/
 Tools/llama-native/
+Tools/npu-services/models/
 
 # Local/runtime data, not source
 Backups/
