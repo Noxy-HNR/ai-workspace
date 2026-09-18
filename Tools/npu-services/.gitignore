@@ -1,0 +1,5 @@
+__pycache__/
+models/
+compiled-cache/
+*.sqlite3*
+*.log
