@@ -54,3 +54,9 @@ node_modules/
 # OS cruft
 Thumbs.db
 .DS_Store
+
+# Upstream llama.cpp source checkout (its own git repo, ~1.3 GB)
+Tools/llama-src/
+
+# Local Claude Code tooling state (machine-specific paths)
+.claude/
