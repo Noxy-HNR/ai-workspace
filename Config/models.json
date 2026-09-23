@@ -1,20 +1,5 @@
 ﻿{
     "models":  {
-                   "Qwen3.5-9B-Q4_K_M.gguf":  {
-                                                  "contextSize":  200704,
-                                                  "gpuLayers":  999,
-                                                  "flashAttn":  true,
-                                                  "parallel":  1,
-                                                  "jinja":  true,
-                                                  "batchSize":  1024,
-                                                  "ubatchSize":  256,
-                                                  "ropeFreqBase":  0,
-                                                  "ropeFreqScale":  0,
-                                                  "threads":  8,
-                                                  "cacheTypeK":  "f16",
-                                                  "cacheTypeV":  "f16",
-                                                  "extraArgs":  "-lv 5, --log-prompts-dir C:\\AI\\logs\\llama-prompts"
-                                              },
                    "Qwen3.8-27B-Uncensored-IQ3_M.gguf":  {
                                                              "contextSize":  20480,
                                                              "gpuLayers":  60,
@@ -30,21 +15,6 @@
                                                              "cacheTypeV":  "q8_0",
                                                              "extraArgs":  ""
                                                          },
-                   "Qwen3.5-9B-UD-Q6_K_XL.gguf":  {
-                                                      "contextSize":  114688,
-                                                      "gpuLayers":  999,
-                                                      "flashAttn":  true,
-                                                      "parallel":  1,
-                                                      "jinja":  true,
-                                                      "batchSize":  1024,
-                                                      "ubatchSize":  256,
-                                                      "ropeFreqBase":  0,
-                                                      "ropeFreqScale":  0,
-                                                      "threads":  8,
-                                                      "cacheTypeK":  "f16",
-                                                      "cacheTypeV":  "f16",
-                                                      "extraArgs":  ""
-                                                  },
                    "medgemma-27b-it-Q4_K_M.gguf":  {
                                                        "contextSize":  32768,
                                                        "gpuLayers":  31,
@@ -59,7 +29,22 @@
                                                        "cacheTypeK":  "f16",
                                                        "cacheTypeV":  "f16",
                                                        "extraArgs":  ""
-                                                   }
+                                                   },
+                   "Qwen3.5-9B-UD-Q6_K_XL.gguf":  {
+                                                      "contextSize":  114688,
+                                                      "gpuLayers":  999,
+                                                      "flashAttn":  true,
+                                                      "parallel":  1,
+                                                      "jinja":  true,
+                                                      "batchSize":  1024,
+                                                      "ubatchSize":  256,
+                                                      "ropeFreqBase":  0,
+                                                      "ropeFreqScale":  0,
+                                                      "threads":  8,
+                                                      "cacheTypeK":  "f16",
+                                                      "cacheTypeV":  "f16",
+                                                      "extraArgs":  ""
+                                                  }
                },
-    "activeModel":  "medgemma-27b-it-Q4_K_M.gguf"
+    "activeModel":  "Qwen3.5-9B-UD-Q6_K_XL.gguf"
 }
