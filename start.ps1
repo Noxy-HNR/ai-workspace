@@ -1,4 +1,4 @@
-<#
+﻿<#
 =======================================================================
  C:\AI\start.ps1
  MASTER STARTUP SCRIPT - LOCAL AI STACK
@@ -370,6 +370,25 @@ cptr run --host 127.0.0.1 --port 8000
 # FINAL HEALTH CHECK
 # ---------------------------------------------------------------------
 
+# --- Switchboard (added by C:\AI\Switchboard\scripts\integrate-start.ps1) ---
+# Optional: routes chat requests to the best local model. Remove this block, or
+# run C:\AI\Switchboard\scripts\integrate-start.ps1 -Remove, to take it out.
+# Nothing below can stop the rest of the stack: it is wrapped in try/catch.
+$SwitchboardStart = "C:\AI\Switchboard\scripts\start.ps1"
+if (Test-Path $SwitchboardStart) {
+    Step "Starting Switchboard"
+    try {
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $SwitchboardStart | Out-Null
+        if (Test-Endpoint -Url "http://127.0.0.1:8002/health" -TimeoutSec 5) {
+            OK "Switchboard         READY  :8002"
+        } else {
+            Warn "Switchboard did not answer on :8002 (the rest of the stack is unaffected)."
+        }
+    } catch {
+        Warn "Switchboard failed to start: $($_.Exception.Message)"
+    }
+}
+# --- end Switchboard ---
 Banner "FINAL HEALTH CHECK"
 
 if (Test-Endpoint -Url $LlamaHealthUrl -TimeoutSec 5) {

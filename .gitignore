@@ -9,6 +9,7 @@ oura.env
 # Nested git repos already tracked separately — do not vendor
 Personal-health-data/
 Projects/
+Switchboard/
 
 # Large binaries — never belong in git
 models/*.gguf
@@ -25,6 +26,7 @@ Databases/
 Downloads/
 Logs/
 Workspace/Screenshots/
+Config/llama-native.pid
 
 # Completed improvement workspace artifacts
 Workspace/project-improvements/original/
