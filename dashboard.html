@@ -550,6 +550,7 @@
             <button type="button" class="tab" data-tab="scripts" aria-pressed="false" aria-controls="tab-scripts" onclick="switchTab('scripts')">Scripts</button>
             <button type="button" class="tab" data-tab="chat" aria-pressed="false" aria-controls="tab-chat" onclick="switchTab('chat')">Chat</button>
             <button type="button" class="tab" data-tab="logs" aria-pressed="false" aria-controls="tab-logs" onclick="switchTab('logs')">Logs</button>
+            <button type="button" class="tab" data-tab="settings" aria-pressed="false" aria-controls="tab-settings" onclick="switchTab('settings')">Settings</button>
         </nav>
         
         <!-- Feedback Area -->
@@ -722,6 +723,23 @@
                 </div>
             </div>
         </div>
+
+        <!-- Settings Tab: Switchboard's settings panel, including API keys. It is
+             served by Switchboard itself, so keys go straight to it and never
+             pass through this dashboard's server. -->
+        <div class="tab-content" id="tab-settings">
+            <div class="section">
+                <div class="section-title">Settings &amp; API keys</div>
+                <p style="color: var(--text-secondary); margin-bottom: 16px;">
+                    Served by Switchboard. If this stays empty, Switchboard is not running;
+                    C:\AI\start.ps1 starts it.
+                    <a href="http://127.0.0.1:8002/dashboard#settings" target="_blank" rel="noopener"
+                       style="color: var(--accent-blue);">Open in its own window</a>
+                </p>
+                <iframe id="switchboardSettings" title="Switchboard settings and API keys"
+                        style="width: 100%; height: 700px; border: 0; background: transparent; display: block;"></iframe>
+            </div>
+        </div>
     </div>
     
     <script>
@@ -734,6 +752,19 @@
         let benchmarkRunning = false;
         
         // ---- Tab Switching ----
+        // Switchboard serves the Settings tab's panel; it reports its height so
+        // the frame can fit it. Only messages from Switchboard are trusted.
+        const SWITCHBOARD_ORIGIN = 'http://127.0.0.1:8002';
+        const SWITCHBOARD_SETTINGS_URL = SWITCHBOARD_ORIGIN + '/dashboard?embed=settings';
+        window.addEventListener('message', (event) => {
+            if (event.origin !== SWITCHBOARD_ORIGIN) return;
+            const data = event.data;
+            if (data && data.type === 'switchboard-settings-height' && Number.isFinite(data.height)) {
+                const height = Math.max(400, Math.min(Math.round(data.height) + 8, 20000));
+                document.getElementById('switchboardSettings').style.height = height + 'px';
+            }
+        });
+
         function switchTab(tabName) {
             document.querySelector('.workspace-intro').hidden = tabName !== 'services';
             document.querySelectorAll('.tab').forEach(t => { t.classList.remove('active'); t.setAttribute('aria-pressed', String(t.dataset.tab === tabName)); });
@@ -746,6 +777,11 @@
             }
             if (tabName === 'scripts') {
                 loadScriptsCatalog();
+            }
+            if (tabName === 'settings') {
+                // Loaded on first open, so Switchboard is only asked when you look.
+                const frame = document.getElementById('switchboardSettings');
+                if (!frame.getAttribute('src')) { frame.src = SWITCHBOARD_SETTINGS_URL; }
             }
             // Start log auto-refresh when logs tab is active
             if (tabName === 'logs') {
