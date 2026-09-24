@@ -13,11 +13,12 @@
                                                              "threads":  20,
                                                              "cacheTypeK":  "q8_0",
                                                              "cacheTypeV":  "q8_0",
+                                                             "reasoningEffort":  "medium",
                                                              "extraArgs":  ""
                                                          },
                    "medgemma-27b-it-Q4_K_M.gguf":  {
                                                        "contextSize":  32768,
-                                                       "gpuLayers":  31,
+                                                       "gpuLayers":  37,
                                                        "flashAttn":  true,
                                                        "parallel":  1,
                                                        "jinja":  true,
@@ -26,8 +27,9 @@
                                                        "ropeFreqBase":  0,
                                                        "ropeFreqScale":  0,
                                                        "threads":  20,
-                                                       "cacheTypeK":  "f16",
-                                                       "cacheTypeV":  "f16",
+                                                       "cacheTypeK":  "q8_0",
+                                                       "cacheTypeV":  "q8_0",
+                                                       "reasoningEffort":  "default",
                                                        "extraArgs":  ""
                                                    },
                    "Qwen3.5-9B-UD-Q6_K_XL.gguf":  {
@@ -43,6 +45,7 @@
                                                       "threads":  8,
                                                       "cacheTypeK":  "f16",
                                                       "cacheTypeV":  "f16",
+                                                      "reasoningEffort":  "default",
                                                       "extraArgs":  ""
                                                   }
                },

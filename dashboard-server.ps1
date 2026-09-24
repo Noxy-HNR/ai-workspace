@@ -305,6 +305,7 @@ function Get-ModelDefaults {
         threads       = 8
         cacheTypeK    = 'f16'
         cacheTypeV    = 'f16'
+        reasoningEffort = 'default'
         extraArgs     = ''
     }
 }

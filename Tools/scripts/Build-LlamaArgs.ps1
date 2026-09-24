@@ -29,6 +29,12 @@ function Build-LlamaArgs {
     if ($Settings.ropeFreqScale -and [double]$Settings.ropeFreqScale -ne 0) {
         $argList += @('--rope-freq-scale', [string]$Settings.ropeFreqScale)
     }
+    $effort = $null
+    if ($Settings -is [System.Collections.IDictionary]) { $effort = [string]$Settings['reasoningEffort'] }
+    elseif ($Settings.PSObject.Properties['reasoningEffort']) { $effort = [string]$Settings.reasoningEffort }
+    if (-not [string]::IsNullOrWhiteSpace($effort) -and $effort -ne 'default') {
+        $argList += @('--reasoning-effort', $effort)
+    }
     if (-not [string]::IsNullOrWhiteSpace($Settings.extraArgs)) {
         $tokenMatches = [regex]::Matches($Settings.extraArgs, '"[^"]*"|''[^'']*''|\S+')
         foreach ($m in $tokenMatches) { $argList += $m.Value.Trim('"').Trim("'") }
