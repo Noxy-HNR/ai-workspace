@@ -746,6 +746,7 @@
         const DASHBOARD_API = 'http://127.0.0.1:9090';
         const LLAMA_API = 'http://127.0.0.1:10000/v1';
         const KV_CACHE_TYPES = ['f16','q8_0','q4_0','q4_1','q5_0','q5_1'];
+        const REASONING_EFFORTS = ['default','minimal','low','medium','high','xhigh','max'];
         
         let chatHistory = [];
         let logRefreshInterval = null;
@@ -1260,6 +1261,10 @@
                                 <div class="label">KV Cache</div>
                                 <div class="value">${s.cacheTypeK}/${s.cacheTypeV}</div>
                             </div>
+                            <div class="model-stat">
+                                <div class="label">Reasoning</div>
+                                <div class="value">${escapeHtml(s.reasoningEffort || 'default')}</div>
+                            </div>
                         </div>
                         <div class="model-actions">
                             <button class="btn btn-sm" onclick="toggleModelSettings(${idx})">⚙ Settings</button>
@@ -1314,6 +1319,12 @@
                                         ${KV_CACHE_TYPES.map(v => `<option value="${v}" ${s.cacheTypeV === v ? 'selected' : ''}>${v}</option>`).join('')}
                                     </select>
                                 </div>
+                                <div class="settings-field">
+                                    <label for="${fieldId(idx,'reasoningEffort')}">Reasoning Effort (only models whose template supports it)</label>
+                                    <select id="${fieldId(idx,'reasoningEffort')}" class="chat-input" style="padding:8px 10px; font-size:13px;">
+                                        ${REASONING_EFFORTS.map(v => `<option value="${v}" ${(s.reasoningEffort || 'default') === v ? 'selected' : ''}>${v === 'default' ? 'default (template decides)' : v}</option>`).join('')}
+                                    </select>
+                                </div>
                                 <div class="settings-field full-width">
                                     <label for="${fieldId(idx,'extraArgs')}">Extra CLI Args (appended as-is, e.g. --mlock --no-mmap)</label>
                                     <input type="text" id="${fieldId(idx,'extraArgs')}" value="${escapeHtml(s.extraArgs)}">
@@ -1361,6 +1372,7 @@
                 ropeFreqScale: parseFloat(document.getElementById(fieldId(idx,'ropeFreqScale')).value) || 0,
                 cacheTypeK: document.getElementById(fieldId(idx,'cacheTypeK')).value || 'f16',
                 cacheTypeV: document.getElementById(fieldId(idx,'cacheTypeV')).value || 'f16',
+                reasoningEffort: document.getElementById(fieldId(idx,'reasoningEffort')).value || 'default',
                 extraArgs: document.getElementById(fieldId(idx,'extraArgs')).value || '',
                 flashAttn: document.getElementById(fieldId(idx,'flashAttn')).checked,
                 jinja: document.getElementById(fieldId(idx,'jinja')).checked
