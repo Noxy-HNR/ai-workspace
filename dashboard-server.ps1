@@ -22,6 +22,11 @@ $HealthLauncher = Join-Path $HealthRoot 'start-health.ps1'
 $HealthEnvFile = Join-Path $HealthRoot 'oura.env'
 $ScriptsLogDir = Join-Path $LogDir 'scripts'
 $ScreenshotDir = Join-Path $Root 'Workspace\Screenshots'
+$CptrSyncScript = Join-Path $Root 'Tools\scripts\sync-cptr-context.py'
+# cptr compacts a chat when it passes this fraction of llama-server's real context. The rest is
+# headroom for the model's reply and for cptr's rough (len/4) token estimate.
+$CptrCompactRatio = 0.70
+$script:CptrSync = @{ nctx = 0; cptrPid = 0; at = [datetime]::MinValue }
 
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 New-Item -ItemType Directory -Force -Path $ScriptsLogDir | Out-Null
@@ -96,6 +101,44 @@ function Get-GpuStats {
     } catch { return $null }
 }
 
+function Sync-CptrContext {
+    # cptr decides when to compact a chat from its own token threshold and never asks llama-server
+    # what context it was started with, so that threshold went stale on every model switch
+    # (24K-180K here). Tools\scripts\sync-cptr-context.py writes ratio x n_ctx into cptr's database,
+    # where cptr re-reads it on every request (no restart). Re-sync when the context changes, when
+    # cptr restarts (it re-seeds its database from config.toml at startup and could revert the value),
+    # and every 5 minutes as a backstop. A CptrPid of -1 means "don't care".
+    param([int]$NCtx = 0, [int]$CptrPid = -1)
+    if (-not (Test-Path $CptrSyncScript)) { return }
+    if ($NCtx -le 0) {
+        try {
+            $props = Invoke-RestMethod "$LlamaHost/props" -TimeoutSec 2 -ErrorAction Stop
+            $NCtx = [int]$props.default_generation_settings.n_ctx
+        } catch { return }
+    }
+    if ($NCtx -le 0) { return }
+
+    $s = $script:CptrSync
+    $stale = ((Get-Date) - $s.at).TotalMinutes -ge 5
+    $pidChanged = ($CptrPid -ge 0) -and ($CptrPid -ne $s.cptrPid)
+    if ($NCtx -eq $s.nctx -and -not $pidChanged -and -not $stale) { return }
+
+    # Record first, so a slow or failing helper is retried at most every 5 minutes, not every poll.
+    $s.nctx = $NCtx
+    $s.at = Get-Date
+    if ($CptrPid -ge 0) { $s.cptrPid = $CptrPid }
+    $syncLog = Join-Path $LogDir 'cptr-sync.log'
+    try {
+        $py = (Get-Command python -ErrorAction Stop).Source
+        $ratio = $CptrCompactRatio.ToString([Globalization.CultureInfo]::InvariantCulture)
+        # Not waited on: the helper imports cptr (a few seconds) and this runs on the dashboard's
+        # single request thread. It appends its own result line to the log.
+        Start-Process -FilePath $py -ArgumentList @($CptrSyncScript, '--n-ctx', "$NCtx", '--ratio', $ratio, '--log', $syncLog) -WindowStyle Hidden | Out-Null
+    } catch {
+        "$(Get-Date -Format s) failed to launch sync: $($_.Exception.Message)" | Add-Content -Path $syncLog -Encoding UTF8
+    }
+}
+
 function Get-ServiceStatus {
     $llamaUp = Test-Http "$LlamaHost/v1/models"
     $cptrUp = Test-Http "$CptrHost/openapi.json"
@@ -110,6 +153,8 @@ function Get-ServiceStatus {
     $llamaPid = Get-PortPid 10000
     $cptrPid = Get-PortPid 8000
     $ouraPid = Get-PortPid $ouraPort
+    # This is the dashboard's heartbeat: the cptr sync is a side feature and must never be able to break it.
+    if ($llamaUp) { try { Sync-CptrContext -CptrPid ([int](@($cptrPid)[0])) } catch {} }
 
     $os = Get-CimInstance Win32_OperatingSystem
     $totalRam = [math]::Round($os.TotalVisibleMemorySize / 1MB, 1)
@@ -199,6 +244,14 @@ function Start-LlamaNative {
         $p = Start-Process -FilePath $LlamaBin -ArgumentList $argList -WorkingDirectory (Split-Path $LlamaBin) -RedirectStandardOutput $stdOut -RedirectStandardError $stdErr -WindowStyle Hidden -PassThru
         try { $p.PriorityClass = 'High' } catch {}
         Set-Content -Path $LlamaPidFile -Value $p.Id -Encoding UTF8
+        # Tell cptr the new context right away (the model is still loading, so /props isn't up yet);
+        # the status poll re-checks against the real n_ctx once it is.
+        try {
+            $ctxSize = if ($Settings -is [System.Collections.IDictionary]) { [int]$Settings['contextSize'] } else { [int]$Settings.contextSize }
+            $slots = if ($Settings -is [System.Collections.IDictionary]) { [int]$Settings['parallel'] } else { [int]$Settings.parallel }
+            if ($slots -lt 1) { $slots = 1 }
+            if ($ctxSize -gt 0) { Sync-CptrContext -NCtx ([int]($ctxSize / $slots)) }
+        } catch {}
         return @{ success = $true; message = "llama-server starting natively (PID $($p.Id)). Loading $FileName..." }
     } catch {
         return @{ success = $false; message = "Failed to start llama-server: $($_.Exception.Message)" }
