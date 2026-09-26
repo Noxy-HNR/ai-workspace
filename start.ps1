@@ -32,6 +32,14 @@
 =======================================================================
 #>
 
+[CmdletBinding()]
+param(
+    # Start and check the services without opening browser tabs or console windows.
+    [switch]$NoUi,
+    # Return to the caller after startup (also used by automated validation).
+    [switch]$NoPause
+)
+
 $ErrorActionPreference = "Stop"
 
 # ---------------------------------------------------------------------
@@ -92,7 +100,7 @@ function Die {
     param([string]$Text)
     Fail $Text
     Write-Host ""
-    Read-Host "Press Enter to close"
+    if (-not $NoPause) { Read-Host "Press Enter to close" }
     exit 1
 }
 
@@ -347,7 +355,8 @@ Set-Location 'C:\AI'
 cptr run --host 127.0.0.1 --port 8000
 "@
 
-        Start-Process -FilePath "powershell.exe" -ArgumentList @(
+        $cptrWindowStyle = if ($NoUi) { 'Hidden' } else { 'Normal' }
+        Start-Process -FilePath "powershell.exe" -WindowStyle $cptrWindowStyle -ArgumentList @(
             "-NoProfile", "-ExecutionPolicy", "Bypass", "-NoExit", "-Command", $cptrCommand
         ) -WorkingDirectory $Root | Out-Null
 
@@ -378,7 +387,15 @@ $SwitchboardStart = "C:\AI\Switchboard\scripts\start.ps1"
 if (Test-Path $SwitchboardStart) {
     Step "Starting Switchboard"
     try {
-        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $SwitchboardStart | Out-Null
+        # A child service can retain a native pipeline handle after its launcher
+        # exits. Wait on the launcher process, with file-backed output instead.
+        $sbLauncher = Start-Process -FilePath 'powershell.exe' -WindowStyle Hidden -PassThru `
+            -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $SwitchboardStart) `
+            -RedirectStandardOutput (Join-Path $LogDir 'switchboard-start.stdout.log') `
+            -RedirectStandardError (Join-Path $LogDir 'switchboard-start.stderr.log')
+        if (-not $sbLauncher.WaitForExit(60000)) {
+            Warn 'Switchboard launcher is still running after 60 seconds; checking service health.'
+        }
         if (Test-Endpoint -Url "http://127.0.0.1:8002/health" -TimeoutSec 5) {
             OK "Switchboard         READY  :8002"
         } else {
@@ -411,10 +428,12 @@ if (Test-Endpoint -Url $CptrUrl -TimeoutSec 5) {
 
 Step "Opening interfaces"
 
-Start-Process "http://127.0.0.1:9090"
-OK "Opened dashboard."
+if (-not $NoUi) {
+    Start-Process "http://127.0.0.1:9090"
+    OK "Opened dashboard."
+}
 
-if (Test-Endpoint -Url $CptrUrl -TimeoutSec 5) {
+if ((-not $NoUi) -and (Test-Endpoint -Url $CptrUrl -TimeoutSec 5)) {
     Start-Process $CptrUrl
     OK "Opened cptr."
 }
@@ -450,4 +469,4 @@ Write-Host ""
 Write-Host "Startup complete." -ForegroundColor Green
 Write-Host ""
 
-Read-Host "Press Enter to close"
+if (-not $NoPause) { Read-Host "Press Enter to close" }
