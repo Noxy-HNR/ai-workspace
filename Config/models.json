@@ -63,7 +63,23 @@
                                                       "cacheTypeV":  "q8_0",
                                                       "reasoningEffort":  "default",
                                                       "extraArgs":  "--spec-type ngram-mod --spec-ngram-mod-n-match 8"
-                                                  }
+                                                  },
+                   "Qwen3.5-9B-UD-Q6_K_XL-mtp.gguf":  {
+                                                          "contextSize":  131072,
+                                                          "gpuLayers":  999,
+                                                          "flashAttn":  true,
+                                                          "parallel":  1,
+                                                          "jinja":  true,
+                                                          "batchSize":  1024,
+                                                          "ubatchSize":  256,
+                                                          "ropeFreqBase":  0,
+                                                          "ropeFreqScale":  0,
+                                                          "threads":  8,
+                                                          "cacheTypeK":  "q8_0",
+                                                          "cacheTypeV":  "q8_0",
+                                                          "reasoningEffort":  "default",
+                                                          "extraArgs":  "--spec-type draft-mtp,ngram-mod --spec-draft-n-max 2"
+                                                      }
                },
-    "activeModel":  "Qwen3.5-9B-UD-Q6_K_XL.gguf"
+    "activeModel":  "Qwen3.5-9B-UD-Q6_K_XL-mtp.gguf"
 }
