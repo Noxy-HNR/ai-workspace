@@ -11,6 +11,10 @@ $Root = 'C:\AI'
 $Port = 9090
 $LlamaHost = 'http://127.0.0.1:10000'
 $CptrHost = 'http://127.0.0.1:8000'
+$SwitchboardHost = 'http://127.0.0.1:8002'
+$SwitchboardRoot = Join-Path $Root 'Switchboard'
+$SwitchboardStart = Join-Path $SwitchboardRoot 'scripts\start.ps1'
+$SwitchboardStop = Join-Path $SwitchboardRoot 'scripts\stop.ps1'
 $DashboardFile = Join-Path $Root 'dashboard.html'
 $LogDir = Join-Path $Root 'Logs'
 $ModelsDir = Join-Path $Root 'models'
@@ -142,6 +146,7 @@ function Sync-CptrContext {
 function Get-ServiceStatus {
     $llamaUp = Test-Http "$LlamaHost/v1/models"
     $cptrUp = Test-Http "$CptrHost/openapi.json"
+    $switchboardUp = Test-Http "$SwitchboardHost/health"
     $ouraPort = Get-OuraPort
     $ouraUrl = "http://127.0.0.1:$ouraPort"
     $ouraHealth = $null
@@ -152,6 +157,7 @@ function Get-ServiceStatus {
 
     $llamaPid = Get-PortPid 10000
     $cptrPid = Get-PortPid 8000
+    $switchboardPid = Get-PortPid 8002
     $ouraPid = Get-PortPid $ouraPort
     # This is the dashboard's heartbeat: the cptr sync is a side feature and must never be able to break it.
     if ($llamaUp) { try { Sync-CptrContext -CptrPid ([int](@($cptrPid)[0])) } catch {} }
@@ -182,6 +188,14 @@ function Get-ServiceStatus {
                 url = $CptrHost
                 error = if (-not $cptrUp) { 'cptr OpenAPI endpoint is not responding' } else { '' }
             }
+            'switchboard' = @{
+                running = $switchboardUp
+                pid = $switchboardPid
+                startTime = ''
+                port = 8002
+                url = $SwitchboardHost
+                error = if (-not $switchboardUp -and $switchboardPid) { 'Port 8002 is listening, but Switchboard health is not responding' } elseif (-not $switchboardUp) { 'Switchboard is not responding' } else { '' }
+            }
             'oura-mcp' = @{
                 running = $ouraUp
                 pid = $ouraPid
@@ -210,14 +224,19 @@ function Get-ServiceStatus {
 
 function Stop-LlamaNative {
     $stopped = $false
+    $killed = @()
     $existingPid = Get-PortPid 10000
     if ($existingPid) {
-        try { Stop-Process -Id $existingPid -Force -ErrorAction SilentlyContinue; $stopped = $true } catch {}
+        try { Stop-Process -Id $existingPid -Force -ErrorAction SilentlyContinue; $stopped = $true; $killed += [int]$existingPid } catch {}
     }
     Get-Process llama-server -ErrorAction SilentlyContinue | ForEach-Object {
         Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
         $stopped = $true
+        $killed += $_.Id
     }
+    # Wait for the processes to actually exit so their VRAM is released before the next model loads;
+    # starting early makes the new model spill into system RAM and load very slowly.
+    foreach ($id in ($killed | Select-Object -Unique)) { Wait-Process -Id $id -Timeout 30 -ErrorAction SilentlyContinue }
     if ($stopped) { Start-Sleep -Seconds 1 }
     Remove-Item $LlamaPidFile -Force -ErrorAction SilentlyContinue
     return @{ success = $true; message = 'llama-server stopped.' }
@@ -226,8 +245,15 @@ function Stop-LlamaNative {
 function Start-LlamaNative {
     param([string]$FileName, $Settings)
 
-    if (-not (Test-Path $LlamaBin)) {
-        return @{ success = $false; message = "Native llama-server.exe not found at $LlamaBin" }
+    # A model can name its own llama-server build (serverBinary, relative to C:\AI or absolute), e.g. a fork
+    # for quant types the normal build rejects. Without it, the normal build runs.
+    $bin = $LlamaBin
+    $customBin = if ($Settings -is [System.Collections.IDictionary]) { [string]$Settings['serverBinary'] } else { [string]$Settings.serverBinary }
+    if (-not [string]::IsNullOrWhiteSpace($customBin)) {
+        $bin = if ([System.IO.Path]::IsPathRooted($customBin)) { $customBin } else { Join-Path $Root $customBin }
+    }
+    if (-not (Test-Path $bin)) {
+        return @{ success = $false; message = "llama-server.exe not found at $bin" }
     }
     $modelPath = Join-Path $ModelsDir $FileName
     if (-not (Test-Path $modelPath)) {
@@ -241,7 +267,7 @@ function Start-LlamaNative {
     $stdErr = Join-Path $LogDir 'llama.stderr.log'
 
     try {
-        $p = Start-Process -FilePath $LlamaBin -ArgumentList $argList -WorkingDirectory (Split-Path $LlamaBin) -RedirectStandardOutput $stdOut -RedirectStandardError $stdErr -WindowStyle Hidden -PassThru
+        $p = Start-Process -FilePath $bin -ArgumentList $argList -WorkingDirectory (Split-Path $bin) -RedirectStandardOutput $stdOut -RedirectStandardError $stdErr -WindowStyle Hidden -PassThru
         try { $p.PriorityClass = 'High' } catch {}
         Set-Content -Path $LlamaPidFile -Value $p.Id -Encoding UTF8
         # Tell cptr the new context right away (the model is still loading, so /props isn't up yet);
@@ -278,6 +304,21 @@ function Start-ServiceByName {
                 return @{ success=$false; message='cptr process started but its OpenAPI endpoint did not become ready.' }
             } catch { return @{ success=$false; message="Failed to start cptr: $($_.Exception.Message)" } }
         }
+        'switchboard' {
+            if (Test-Http "$SwitchboardHost/health") { return @{ success=$true; message='Switchboard is already running.' } }
+            if (-not (Test-Path $SwitchboardStart)) {
+                return @{ success=$false; message="Switchboard launcher not found at $SwitchboardStart" }
+            }
+            # Delegate to Switchboard's own guarded launcher. It refuses a foreign
+            # port owner and never starts or restarts llama-server.
+            $outLog = Join-Path $ScriptsLogDir 'switchboard-launcher.stdout.log'
+            $errLog = Join-Path $ScriptsLogDir 'switchboard-launcher.stderr.log'
+            try {
+                $p = Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',$SwitchboardStart) `
+                    -WorkingDirectory $SwitchboardRoot -WindowStyle Hidden -RedirectStandardOutput $outLog -RedirectStandardError $errLog -PassThru
+                return @{ success=$true; message="Switchboard starting (launcher PID $($p.Id)); llama-server will not be restarted." }
+            } catch { return @{ success=$false; message="Failed to start Switchboard: $($_.Exception.Message)" } }
+        }
         'oura-mcp' {
             if (-not (Test-Path $HealthLauncher)) {
                 return @{ success=$false; message="Personal Health MCP launcher not found at $HealthLauncher" }
@@ -307,6 +348,20 @@ function Stop-ServiceByName {
             $cptrPid = Get-PortPid 8000
             if ($cptrPid) { Stop-Process -Id $cptrPid -Force -ErrorAction SilentlyContinue }
             return @{ success=$true; message='cptr stopped.' }
+        }
+        'switchboard' {
+            if (-not (Test-Path $SwitchboardStop)) {
+                return @{ success=$false; message="Switchboard stopper not found at $SwitchboardStop" }
+            }
+            try {
+                $output = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $SwitchboardStop 2>&1
+                if (Test-Http "$SwitchboardHost/health") {
+                    return @{ success=$false; message='Switchboard is still responding after its guarded stop command.' }
+                }
+                $message = ($output | ForEach-Object { [string]$_ }) -join ' '
+                if ([string]::IsNullOrWhiteSpace($message)) { $message = 'Switchboard stopped.' }
+                return @{ success=$true; message=$message.Trim() }
+            } catch { return @{ success=$false; message="Failed to stop Switchboard: $($_.Exception.Message)" } }
         }
         'oura-mcp' {
             if (-not (Test-Path $HealthLauncher)) {
@@ -396,6 +451,9 @@ function Get-ModelSettingsFor {
                 $merged[$key] = $defaults[$key]
             }
         }
+        if (($stored.PSObject.Properties.Name -contains 'serverBinary') -and -not [string]::IsNullOrWhiteSpace([string]$stored.serverBinary)) {
+            $merged['serverBinary'] = [string]$stored.serverBinary
+        }
         return $merged
     }
     return $defaults
@@ -452,6 +510,16 @@ function Save-ModelConfigOnly {
             $merged[$key] = $defaults[$key]
         }
     }
+    # serverBinary is optional and stored only when set. The Models tab doesn't send it, so keep the
+    # saved value unless the caller sends one (an empty string clears it).
+    $customBin = ''
+    if ($Settings.PSObject.Properties.Name -contains 'serverBinary') {
+        $customBin = [string]$Settings.serverBinary
+    } elseif ($config.models -and ($config.models.PSObject.Properties.Name -contains $FileName) -and
+              ($config.models.$FileName.PSObject.Properties.Name -contains 'serverBinary')) {
+        $customBin = [string]$config.models.$FileName.serverBinary
+    }
+    if (-not [string]::IsNullOrWhiteSpace($customBin)) { $merged['serverBinary'] = $customBin }
     if (-not $config.models) { $config | Add-Member -NotePropertyName models -NotePropertyValue ([ordered]@{}) -Force }
     $config.models | Add-Member -NotePropertyName $FileName -NotePropertyValue $merged -Force
     Save-ModelsConfig -Config $config
