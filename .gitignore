@@ -62,3 +62,11 @@ Tools/llama-src/
 
 # Local Claude Code tooling state (machine-specific paths)
 .claude/
+
+# Fine-tuning data and LoRA artifacts (large, not project source)
+Finetuning/
+lora/
+
+# Scratch space and research notes (not project source)
+Scratch/
+Knowledge/
