@@ -65,7 +65,7 @@
                                                                             "extraArgs":  "--spec-type draft-mtp,ngram-mod --spec-draft-n-max 2 --load-mode none --cache-ram 0"
                                                                         },
                    "Ternary-Bonsai-2-27B-PTQ1_0.gguf":  {
-                                                            "contextSize":  65536,
+                                                            "contextSize":  131072,
                                                             "gpuLayers":  999,
                                                             "flashAttn":  true,
                                                             "parallel":  1,
