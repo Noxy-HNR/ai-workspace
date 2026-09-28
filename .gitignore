@@ -60,6 +60,15 @@ Thumbs.db
 # Upstream llama.cpp source checkout (its own git repo, ~1.3 GB)
 Tools/llama-src/
 
+# Prebuilt llama.cpp binary distribution (PrismML build, ~670 MB DLLs)
+Tools/llama-prism/
+
+# Downloaded runtime binaries
+Tools/bun-1.4.2/
+
+# Browser-tool session snapshots
+.playwright-mcp/
+
 # Local Claude Code tooling state (machine-specific paths)
 .claude/
 
