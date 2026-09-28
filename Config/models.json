@@ -64,6 +64,23 @@
                                                                             "reasoningEffort":  "xhigh",
                                                                             "extraArgs":  "--spec-type draft-mtp,ngram-mod --spec-draft-n-max 2 --load-mode none --cache-ram 0"
                                                                         },
+                   "Ternary-Bonsai-2-27B-PTQ1_0.gguf":  {
+                                                            "contextSize":  65536,
+                                                            "gpuLayers":  999,
+                                                            "flashAttn":  true,
+                                                            "parallel":  1,
+                                                            "jinja":  true,
+                                                            "batchSize":  1024,
+                                                            "ubatchSize":  256,
+                                                            "ropeFreqBase":  0,
+                                                            "ropeFreqScale":  0,
+                                                            "threads":  8,
+                                                            "cacheTypeK":  "q8_0",
+                                                            "cacheTypeV":  "q8_0",
+                                                            "reasoningEffort":  "medium",
+                                                            "extraArgs":  "--spec-type ngram-mod --spec-ngram-mod-n-match 8 --load-mode none --cache-ram 0",
+                                                            "serverBinary":  "Tools/llama-prism/llama-server.exe"
+                                                        },
                    "Qwen3.5-9B-UD-Q6_K_XL-mtp.gguf":  {
                                                           "contextSize":  131072,
                                                           "gpuLayers":  999,
