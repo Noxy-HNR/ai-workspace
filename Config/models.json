@@ -78,7 +78,7 @@
                                                           "cacheTypeK":  "q8_0",
                                                           "cacheTypeV":  "q8_0",
                                                           "reasoningEffort":  "default",
-                                                          "extraArgs":  "--spec-type draft-mtp,ngram-mod --spec-draft-n-max 2"
+                                                          "extraArgs":  "--spec-type draft-mtp,ngram-mod --spec-draft-n-max 2 --load-mode none --cache-ram 0"
                                                       }
                },
     "activeModel":  "Qwen3.5-9B-UD-Q6_K_XL-mtp.gguf"
