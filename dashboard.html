@@ -852,6 +852,7 @@
             const serviceList = [
                 { name: 'llama-server', port: 10000, url: 'http://127.0.0.1:10000', desc: 'LLM inference engine', icon: '🧠' },
                 { name: 'cptr', port: 8000, url: 'http://127.0.0.1:8000', desc: 'Agent controller / MCP server', icon: '🕹️' },
+                { name: 'switchboard', port: 8002, url: 'http://127.0.0.1:8002', desc: 'Intelligent model routing and agent supervision (starts independently of llama-server)', icon: '🔀' },
                 { name: 'oura-mcp', port: null, url: null, desc: 'Personal health data MCP server', icon: '💍' },
             ];
 
@@ -946,7 +947,7 @@
                     if (action === 'start' || action === 'restart') {
                         // Look up this service's actual port (oura-mcp's port can be
                         // customized in oura.env) then wait for it to come up.
-                        let port = name === 'llama-server' ? 10000 : (name === 'cptr' ? 8000 : null);
+                        let port = name === 'llama-server' ? 10000 : (name === 'cptr' ? 8000 : (name === 'switchboard' ? 8002 : null));
                         if (port === null) {
                             try {
                                 const statusResp = await fetch(`${DASHBOARD_API}/api/status`);
@@ -954,7 +955,8 @@
                                 port = statusData.services?.[name]?.port || null;
                             } catch {}
                         }
-                        const checkUrl = name === 'llama-server' ? `${LLAMA_API}/models` : `http://127.0.0.1:${port}/`;
+                        const checkUrl = name === 'llama-server' ? `${LLAMA_API}/models`
+                            : (name === 'switchboard' ? `http://127.0.0.1:${port}/health` : `http://127.0.0.1:${port}/`);
                         let waited = 0;
                         while (waited < 90) {
                             await new Promise(r => setTimeout(r, 2000));
