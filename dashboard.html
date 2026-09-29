@@ -1199,13 +1199,18 @@
         
         // ---- Models Tab ----
         let modelsCache = [];
-        
+        let lorasCache = [];
+
         async function loadModelsList() {
             const grid = document.getElementById('modelsGrid');
             try {
                 const resp = await fetch(`${DASHBOARD_API}/api/models`);
                 const data = await resp.json();
                 modelsCache = data.models || [];
+                try {
+                    const loraResp = await fetch(`${DASHBOARD_API}/api/loras`);
+                    lorasCache = (await loraResp.json()).adapters || [];
+                } catch { lorasCache = []; }
                 renderModelsList();
                 updateActiveModelStat();
             } catch (e) {
@@ -1267,6 +1272,11 @@
                                 <div class="label">Reasoning</div>
                                 <div class="value">${escapeHtml(s.reasoningEffort || 'default')}</div>
                             </div>
+                            ${s.loraFile ? `
+                            <div class="model-stat">
+                                <div class="label">LoRA</div>
+                                <div class="value" style="font-size:12px;" title="${escapeHtml(s.loraFile)}">×${escapeHtml(String(s.loraScale ?? 1))}</div>
+                            </div>` : ''}
                         </div>
                         <div class="model-actions">
                             <button class="btn btn-sm" onclick="toggleModelSettings(${idx})">⚙ Settings</button>
@@ -1327,6 +1337,7 @@
                                         ${REASONING_EFFORTS.map(v => `<option value="${v}" ${(s.reasoningEffort || 'default') === v ? 'selected' : ''}>${v === 'default' ? 'default (template decides)' : v}</option>`).join('')}
                                     </select>
                                 </div>
+                                ${loraFieldsHtml(m, idx)}
                                 <div class="settings-field full-width">
                                     <label for="${fieldId(idx,'extraArgs')}">Extra CLI Args (appended as-is, e.g. --mlock --no-mmap)</label>
                                     <input type="text" id="${fieldId(idx,'extraArgs')}" value="${escapeHtml(s.extraArgs)}">
@@ -1357,6 +1368,32 @@
             grid.innerHTML = html;
         }
         
+        function loraFieldsHtml(m, idx) {
+            const s = m.settings;
+            // Only adapters trained for this model's architecture can load on it.
+            const compatible = lorasCache.filter(a => !m.architecture || !a.architecture || a.architecture === m.architecture);
+            const current = s.loraFile || '';
+            const missing = current && !compatible.some(a => a.filename === current);
+            const options = [`<option value="" ${current ? '' : 'selected'}>none</option>`]
+                .concat(compatible.map(a => `<option value="${escapeHtml(a.filename)}" ${a.filename === current ? 'selected' : ''}>${escapeHtml(a.filename)} (${a.sizeGB} GB)</option>`))
+                .concat(missing ? [`<option value="${escapeHtml(current)}" selected>${escapeHtml(current)} (not found or wrong architecture)</option>`] : []);
+            const hint = compatible.length
+                ? `${compatible.length} adapter${compatible.length === 1 ? '' : 's'} for ${escapeHtml(m.architecture || 'this model')}`
+                : `No adapters for ${escapeHtml(m.architecture || 'this model')}${lorasCache.length ? ` (${lorasCache.length} for other architectures)` : ''}. Put LoRA .gguf files in C:\\AI\\models or C:\\AI\\models\\lora.`;
+            return `
+                                <div class="settings-field">
+                                    <label for="${fieldId(idx,'loraFile')}">LoRA Adapter</label>
+                                    <select id="${fieldId(idx,'loraFile')}" class="chat-input" style="padding:8px 10px; font-size:13px;" ${compatible.length || current ? '' : 'disabled'}>
+                                        ${options.join('')}
+                                    </select>
+                                    <div style="font-size:11px; color:var(--text-secondary); margin-top:4px;">${hint}</div>
+                                </div>
+                                <div class="settings-field">
+                                    <label for="${fieldId(idx,'loraScale')}">LoRA Scale (1 = full strength)</label>
+                                    <input type="number" step="0.05" min="0" id="${fieldId(idx,'loraScale')}" value="${escapeHtml(String(s.loraScale ?? 1))}">
+                                </div>`;
+        }
+
         function toggleModelSettings(idx) {
             const panel = document.getElementById(`panel_${idx}`);
             panel.classList.toggle('open');
@@ -1377,7 +1414,9 @@
                 reasoningEffort: document.getElementById(fieldId(idx,'reasoningEffort')).value || 'default',
                 extraArgs: document.getElementById(fieldId(idx,'extraArgs')).value || '',
                 flashAttn: document.getElementById(fieldId(idx,'flashAttn')).checked,
-                jinja: document.getElementById(fieldId(idx,'jinja')).checked
+                jinja: document.getElementById(fieldId(idx,'jinja')).checked,
+                loraFile: document.getElementById(fieldId(idx,'loraFile')).value || '',
+                loraScale: (() => { const v = parseFloat(document.getElementById(fieldId(idx,'loraScale')).value); return Number.isFinite(v) && v >= 0 ? v : 1; })()
             };
         }
         

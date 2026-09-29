@@ -260,9 +260,34 @@ function Start-LlamaNative {
         return @{ success = $false; message = "Model file not found: $FileName" }
     }
 
+    # Optional LoRA adapter. Validate before stopping the running server so a bad choice leaves it serving.
+    $loraArgs = @()
+    $loraFile = if ($Settings -is [System.Collections.IDictionary]) { [string]$Settings['loraFile'] } else { [string]$Settings.loraFile }
+    if (-not [string]::IsNullOrWhiteSpace($loraFile)) {
+        $loraPath = Resolve-LoraPath -FileName $loraFile
+        if (-not $loraPath) {
+            return @{ success = $false; message = "LoRA adapter not found: $loraFile (put adapters in C:\AI\models or C:\AI\models\lora)" }
+        }
+        $modelArch = [string](Get-GgufHeader -File (Get-Item -LiteralPath $modelPath))['general.architecture']
+        $loraArch = [string](Get-GgufHeader -File (Get-Item -LiteralPath $loraPath))['general.architecture']
+        if ($modelArch -and $loraArch -and $modelArch -ne $loraArch) {
+            return @{ success = $false; message = "LoRA $loraFile is for '$loraArch' models, but $FileName is '$modelArch'." }
+        }
+        $scaleRaw = if ($Settings -is [System.Collections.IDictionary]) { $Settings['loraScale'] } else { $Settings.loraScale }
+        $scale = 1.0
+        if ($null -ne $scaleRaw -and "$scaleRaw" -ne '') { $scale = [double]::Parse("$scaleRaw", [System.Globalization.CultureInfo]::InvariantCulture) }
+        if ($scale -eq 1.0) {
+            $loraArgs = @('--lora', $loraPath)
+        } else {
+            # FNAME:SCALE can't take a drive-letter colon, so pass the path rooted on the current drive.
+            $rooted = $loraPath -replace '^[A-Za-z]:', ''
+            $loraArgs = @('--lora-scaled', ('{0}:{1}' -f $rooted, $scale.ToString([System.Globalization.CultureInfo]::InvariantCulture)))
+        }
+    }
+
     Stop-LlamaNative | Out-Null
 
-    $argList = Build-LlamaArgs -ModelPath $modelPath -Settings $Settings
+    $argList = @(Build-LlamaArgs -ModelPath $modelPath -Settings $Settings) + $loraArgs
     $stdOut = Join-Path $LogDir 'llama.stdout.log'
     $stdErr = Join-Path $LogDir 'llama.stderr.log'
 
@@ -399,6 +424,9 @@ function Run-QuickBenchmark {
     return @{ benchmark=$results; saved=$file }
 }
 
+# Per-model settings that are stored only when set: a non-default llama-server build and a LoRA adapter.
+$OptionalModelKeys = @('serverBinary', 'loraFile', 'loraScale')
+
 function Get-ModelDefaults {
     return [ordered]@{
         contextSize   = 16384
@@ -451,12 +479,73 @@ function Get-ModelSettingsFor {
                 $merged[$key] = $defaults[$key]
             }
         }
-        if (($stored.PSObject.Properties.Name -contains 'serverBinary') -and -not [string]::IsNullOrWhiteSpace([string]$stored.serverBinary)) {
-            $merged['serverBinary'] = [string]$stored.serverBinary
+        foreach ($opt in $OptionalModelKeys) {
+            if (($stored.PSObject.Properties.Name -contains $opt) -and -not [string]::IsNullOrWhiteSpace([string]$stored.$opt)) {
+                $merged[$opt] = $stored.$opt
+            }
         }
         return $merged
     }
     return $defaults
+}
+
+$script:GgufHeaderCache = @{}
+
+function Get-GgufHeader {
+    # The leading GGUF metadata (general.architecture, general.type, general.name, adapter.*), read without
+    # loading the file. llama.cpp writes the general.* keys first, so stopping at the first array is enough.
+    param([System.IO.FileInfo]$File)
+    $key = "$($File.FullName)|$($File.Length)|$($File.LastWriteTimeUtc.Ticks)"
+    if ($script:GgufHeaderCache.ContainsKey($key)) { return $script:GgufHeaderCache[$key] }
+    $meta = @{}
+    $fs = $null
+    try {
+        $fs = [System.IO.File]::OpenRead($File.FullName)
+        $br = New-Object System.IO.BinaryReader($fs)
+        if ([System.Text.Encoding]::ASCII.GetString($br.ReadBytes(4)) -eq 'GGUF') {
+            [void]$br.ReadUInt32(); [void]$br.ReadUInt64(); $kvCount = $br.ReadUInt64()
+            $fixed = @{ 0 = 1; 1 = 1; 2 = 2; 3 = 2; 4 = 4; 5 = 4; 7 = 1; 10 = 8; 11 = 8; 12 = 8 }
+            for ($i = 0; $i -lt [Math]::Min([double]$kvCount, 24); $i++) {
+                $name = [System.Text.Encoding]::UTF8.GetString($br.ReadBytes([int]$br.ReadUInt64()))
+                $type = [int]$br.ReadUInt32()
+                if ($type -eq 8) { $meta[$name] = [System.Text.Encoding]::UTF8.GetString($br.ReadBytes([int]$br.ReadUInt64())) }
+                elseif ($type -eq 6) { $meta[$name] = $br.ReadSingle() }
+                elseif ($fixed.ContainsKey($type)) { [void]$br.ReadBytes($fixed[$type]) }
+                else { break }
+            }
+        }
+    } catch { } finally { if ($fs) { $fs.Dispose() } }
+    $script:GgufHeaderCache[$key] = $meta
+    return $meta
+}
+
+function Resolve-LoraPath {
+    # LoRA adapters live in C:\AI\models or C:\AI\models\lora; a bare file name only, never a path.
+    param([string]$FileName)
+    if ([string]::IsNullOrWhiteSpace($FileName) -or $FileName -match '[\\/:]' -or $FileName -match '\.\.') { return $null }
+    foreach ($dir in @($ModelsDir, (Join-Path $ModelsDir 'lora'))) {
+        $p = Join-Path $dir $FileName
+        if (Test-Path -LiteralPath $p -PathType Leaf) { return $p }
+    }
+    return $null
+}
+
+function Get-LoraAdapters {
+    $result = @()
+    foreach ($dir in @($ModelsDir, (Join-Path $ModelsDir 'lora'))) {
+        foreach ($f in (Get-ChildItem $dir -Filter '*.gguf' -File -ErrorAction SilentlyContinue | Sort-Object Name)) {
+            $hdr = Get-GgufHeader -File $f
+            if ($hdr['general.type'] -ne 'adapter') { continue }
+            $result += [ordered]@{
+                filename     = $f.Name
+                sizeGB       = [math]::Round($f.Length / 1GB, 2)
+                architecture = [string]$hdr['general.architecture']
+                baseModel    = [string]$hdr['general.name']
+                alpha        = $hdr['adapter.lora.alpha']
+            }
+        }
+    }
+    return @{ adapters = $result }
 }
 
 function Get-AvailableModels {
@@ -464,6 +553,8 @@ function Get-AvailableModels {
     $files = Get-ChildItem $ModelsDir -Filter '*.gguf' -File -ErrorAction SilentlyContinue
     $result = @()
     foreach ($f in ($files | Sort-Object Name)) {
+        $hdr = Get-GgufHeader -File $f
+        if ($hdr['general.type'] -eq 'adapter') { continue }
         $settings = Get-ModelSettingsFor -Config $config -FileName $f.Name
         $hasConfig = $config.models -and ($config.models.PSObject.Properties.Name -contains $f.Name)
         $result += [ordered]@{
@@ -472,6 +563,7 @@ function Get-AvailableModels {
             lastModified = $f.LastWriteTime.ToString('yyyy-MM-dd HH:mm')
             isActive     = ($f.Name -eq $config.activeModel)
             hasCustomConfig = [bool]$hasConfig
+            architecture = [string]$hdr['general.architecture']
             settings     = $settings
         }
     }
@@ -510,16 +602,17 @@ function Save-ModelConfigOnly {
             $merged[$key] = $defaults[$key]
         }
     }
-    # serverBinary is optional and stored only when set. The Models tab doesn't send it, so keep the
-    # saved value unless the caller sends one (an empty string clears it).
-    $customBin = ''
-    if ($Settings.PSObject.Properties.Name -contains 'serverBinary') {
-        $customBin = [string]$Settings.serverBinary
-    } elseif ($config.models -and ($config.models.PSObject.Properties.Name -contains $FileName) -and
-              ($config.models.$FileName.PSObject.Properties.Name -contains 'serverBinary')) {
-        $customBin = [string]$config.models.$FileName.serverBinary
+    # Optional keys are stored only when set. A caller that doesn't send one (the Models tab never sends
+    # serverBinary) keeps the saved value; sending an empty string clears it.
+    $existing = $null
+    if ($config.models -and ($config.models.PSObject.Properties.Name -contains $FileName)) { $existing = $config.models.$FileName }
+    foreach ($opt in $OptionalModelKeys) {
+        $value = $null
+        if ($Settings.PSObject.Properties.Name -contains $opt) { $value = $Settings.$opt }
+        elseif ($existing -and ($existing.PSObject.Properties.Name -contains $opt)) { $value = $existing.$opt }
+        if (-not [string]::IsNullOrWhiteSpace([string]$value)) { $merged[$opt] = $value }
     }
-    if (-not [string]::IsNullOrWhiteSpace($customBin)) { $merged['serverBinary'] = $customBin }
+    if (-not $merged.Contains('loraFile')) { $merged.Remove('loraScale') }
     if (-not $config.models) { $config | Add-Member -NotePropertyName models -NotePropertyValue ([ordered]@{}) -Force }
     $config.models | Add-Member -NotePropertyName $FileName -NotePropertyValue $merged -Force
     Save-ModelsConfig -Config $config
@@ -891,6 +984,10 @@ try {
                 '^/api/results$' {
                     $file = Join-Path $Root 'benchmark-results.json'
                     if (Test-Path $file) { $body = Get-Content $file -Raw } else { $body = (@{success=$false;message='No benchmark results found'} | ConvertTo-Json) }
+                    break
+                }
+                '^/api/loras$' {
+                    $body = (Get-LoraAdapters | ConvertTo-Json -Depth 10)
                     break
                 }
                 '^/api/models$' {
