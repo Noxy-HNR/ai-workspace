@@ -546,7 +546,7 @@
             <button type="button" class="tab active" data-tab="services" aria-pressed="true" aria-controls="tab-services" onclick="switchTab('services')">Services</button>
             <button type="button" class="tab" data-tab="models" aria-pressed="false" aria-controls="tab-models" onclick="switchTab('models')">Models</button>
             <button type="button" class="tab" data-tab="benchmark" aria-pressed="false" aria-controls="tab-benchmark" onclick="switchTab('benchmark')">Benchmark</button>
-            <button type="button" class="tab" data-tab="optimizer" aria-pressed="false" aria-controls="tab-optimizer" onclick="switchTab('optimizer')">Auto Optimizer</button>
+            <button type="button" class="tab" data-tab="optimizer" aria-pressed="false" aria-controls="tab-optimizer" onclick="switchTab('optimizer')">Model Tuner</button>
             <button type="button" class="tab" data-tab="scripts" aria-pressed="false" aria-controls="tab-scripts" onclick="switchTab('scripts')">Scripts</button>
             <button type="button" class="tab" data-tab="chat" aria-pressed="false" aria-controls="tab-chat" onclick="switchTab('chat')">Chat</button>
             <button type="button" class="tab" data-tab="logs" aria-pressed="false" aria-controls="tab-logs" onclick="switchTab('logs')">Logs</button>
@@ -661,22 +661,36 @@
         <!-- Optimizer Tab -->
         <div class="tab-content" id="tab-optimizer">
             <div class="section">
-                <div class="section-title">Auto-Optimizer</div>
+                <div class="section-title">Model Tuner</div>
                 <p style="color: var(--text-secondary); margin-bottom: 16px;">
-                    Automatic tuning is not available for native llama-server yet. Adjust parameters
-                    in Models, then use Benchmark to compare performance.
+                    Finds the fastest safe settings for a model: it reads the file, plans placement and context on
+                    paper, then tests only what matters and keeps whatever is clearly faster. Your saved settings are
+                    never changed until you press Apply. Your model is reloaded when the run ends.
                 </p>
-                <button class="btn" onclick="switchTab('models')" id="quickOptBtn">
-                    Open model settings
-                </button>
-                <div id="optimizerStatus" style="display:none; margin-top: 16px;">
-                    <div class="optimizer-status">
-                        <div id="optCurrentTest" style="font-size: 13px; color: var(--text-secondary);"></div>
-                    </div>
+                <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:12px;">
+                    <select id="tunerModel" aria-label="Model to tune" class="chat-input" style="width:auto; min-width:260px; padding:8px 10px; font-size:13px;"></select>
+                    <select id="tunerMode" aria-label="Tuning depth" class="chat-input" style="width:auto; padding:8px 10px; font-size:13px;">
+                        <option value="quick">Quick: fit + speed (~15-25 min)</option>
+                        <option value="medium">Medium: + thinking cap, quality checks</option>
+                        <option value="full">Full: + coding and long-context checks</option>
+                    </select>
+                    <button class="btn" onclick="tunerAction('plan')" id="tunerPlanBtn">Plan on paper</button>
+                    <button class="btn btn-primary" onclick="tunerAction('start')" id="tunerStartBtn">Start tuning</button>
+                    <button class="btn btn-warning" onclick="tunerAction('stop')" id="tunerStopBtn">Stop</button>
                 </div>
+                <div id="tunerLive" style="border:1px solid var(--border); border-radius:8px; padding:12px; margin-bottom:12px; background:var(--bg-card);">
+                    <div id="tunerHeadline" style="font-weight:600;">No run yet.</div>
+                    <div id="tunerPhase" style="font-size:13px; color:var(--text-secondary); margin-top:4px;"></div>
+                    <div id="tunerEvents" style="font-family:ui-monospace,Consolas,monospace; font-size:12px; max-height:260px; overflow:auto; margin-top:8px; white-space:pre-wrap; color:var(--text-secondary);"></div>
+                </div>
+                <div id="tunerReport" style="display:none; border:1px solid var(--border); border-radius:8px; padding:12px; margin-bottom:12px;"></div>
+                <details style="margin-bottom:12px;"><summary style="cursor:pointer; color:var(--text-secondary);">Last plan</summary>
+                    <pre id="tunerPlan" style="white-space:pre-wrap; font-size:12px; color:var(--text-secondary);"></pre></details>
+                <div class="section-title" style="font-size:14px;">Past runs</div>
+                <div id="tunerRuns" style="font-size:13px; color:var(--text-secondary);"></div>
             </div>
         </div>
-        
+
         <!-- Scripts Tab -->
         <div class="tab-content" id="tab-scripts">
             <div class="section">
@@ -778,6 +792,9 @@
             }
             if (tabName === 'scripts') {
                 loadScriptsCatalog();
+            }
+            if (tabName === 'optimizer') {
+                tunerStart();
             }
             if (tabName === 'settings') {
                 // Loaded on first open, so Switchboard is only asked when you look.
@@ -1078,30 +1095,81 @@
             benchmarkRunning = false;
         }
         
-        // ---- Optimizer ----
-        // The optimizer isn't implemented for the native (Docker-free) stack yet
-        // (see model-optimize.ps1) -- this just surfaces that status message.
-        async function runOptimizer(mode) {
-            const btn = document.getElementById('quickOptBtn');
-            btn.disabled = true;
-            document.getElementById('optimizerStatus').style.display = 'block';
-            document.getElementById('optCurrentTest').textContent = 'Checking...';
-
+        // ---- Model Tuner (Tools/model-tuner; routes /api/optimizer and /api/optimizer/status) ----
+        let tunerTimer = null;
+        const tunerEsc = (t) => String(t ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+        async function tunerLoadModels() {
+            const sel = document.getElementById('tunerModel');
+            if (sel.options.length) return;
             try {
-                const resp = await fetch(`${DASHBOARD_API}/api/optimizer`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ mode })
-                });
-                const data = await resp.json();
-                document.getElementById('optCurrentTest').textContent = data.message || 'Unknown response';
-                addFeedback(data.message || 'Optimizer check complete', data.success ? 'success' : 'info');
-            } catch (e) {
-                document.getElementById('optCurrentTest').textContent = `Error: ${e.message}`;
-                addFeedback(`Optimizer error: ${e.message}`, 'error');
+                const data = await (await fetch(`${DASHBOARD_API}/api/models`)).json();
+                const list = Array.isArray(data) ? data : (data.models || []);
+                const models = list.map(m => (typeof m === 'string') ? m : (m.filename || m.name)).filter(Boolean);
+                sel.innerHTML = models.map(m => `<option value="${tunerEsc(m)}">${tunerEsc(m)}</option>`).join('');
+            } catch (e) { addFeedback(`Could not list models: ${e.message}`, 'error'); }
+        }
+        async function tunerAction(action, extra = {}) {
+            const body = { action, model: document.getElementById('tunerModel').value,
+                           mode: document.getElementById('tunerMode').value, ...extra };
+            if (action === 'start' && !confirm(`Tune ${body.model} (${body.mode})? The model server will restart several times.`)) return;
+            if (action === 'apply') {
+                if (!confirm('Write the tuned settings to models.json?')) return;
+                body.switchboard = confirm("Also update Switchboard's measured speeds (models.toml) with this run's numbers?");
             }
-
-            btn.disabled = false;
+            try {
+                const data = await (await fetch(`${DASHBOARD_API}/api/optimizer`, { method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json();
+                addFeedback(data.message || 'Done', data.success ? 'success' : 'error');
+            } catch (e) { addFeedback(`Tuner error: ${e.message}`, 'error'); }
+            tunerRefresh();
+        }
+        function tunerPct(x) { return (x >= 0 ? '+' : '') + (x * 100).toFixed(1) + '%'; }
+        async function tunerRefresh() {
+            let s;
+            try { s = await (await fetch(`${DASHBOARD_API}/api/optimizer/status`)).json(); } catch (e) { return; }
+            const cur = s.current || {};
+            document.getElementById('tunerStartBtn').disabled = !!s.running;
+            document.getElementById('tunerStopBtn').disabled = !s.running;
+            document.getElementById('tunerHeadline').textContent = cur.status === 'refused'
+                ? `Refused: ${cur.model} (${cur.mode})` : cur.run_id
+                ? `${s.running ? 'Running' : (cur.status || 'finished')}: ${cur.model} (${cur.mode}), ${cur.loads || 0} loads`
+                : 'No run yet.';
+            document.getElementById('tunerPhase').textContent = cur.status === 'refused'
+                ? `Did not start: ${cur.message}` : (cur.phase ? `Phase: ${cur.phase}` : '');
+            const shown = ['phase','decision','compare','load_failed','warn','note','error','quality','calibration'];
+            const ev = (s.events || []).filter(e => shown.includes(e.kind));
+            const box = document.getElementById('tunerEvents');
+            box.textContent = ev.map(e => `${new Date(e.t * 1000).toLocaleTimeString()}  ${e.kind.padEnd(11)} ${e.msg}`).join('\n');
+            box.scrollTop = box.scrollHeight;
+            const rep = document.getElementById('tunerReport');
+            if (s.report && !s.running) {
+                const r = s.report, labels = { prose: 'Decode, prose', code: 'Decode, code edit', prefill: 'Prompt processing' };
+                const bm = r.baseline_metrics || {}, tm = r.best_metrics || {};
+                const rows = Object.keys(labels).filter(w => bm[w] || tm[w]).map(w => {
+                    const a = bm[w] || 0, b = tm[w] || 0;
+                    return `<tr><td style="padding-right:16px;">${labels[w]}</td><td>${a.toFixed(1)}</td><td>${b.toFixed(1)}</td><td>${a ? tunerPct(b / a - 1) : ''}</td></tr>`;
+                }).join('');
+                const changes = Object.entries(r.changes || {});
+                const applyBtn = changes.length
+                    ? `<div style="margin-top:8px; font-size:13px;">Proposed changes: ${changes.map(([k, v]) => `<code>${tunerEsc(k)}</code> ${tunerEsc(v[0])} &rarr; ${tunerEsc(v[1])}`).join(', ')}</div>
+                       <button class="btn btn-primary btn-sm" style="margin-top:8px;" data-run="${tunerEsc(r.run_id)}" onclick="tunerAction('apply', {run_id: this.dataset.run})">Apply to models.json</button>`
+                    : '<div style="margin-top:8px; font-size:13px;">Your current settings were already the best found.</div>';
+                rep.style.display = 'block';
+                rep.innerHTML = `<div style="font-weight:600; margin-bottom:6px;">Result: ${tunerEsc(r.model)} ${tunerPct(r.improvement || 0)} overall (${tunerEsc(r.status)})</div>
+                    <table style="font-size:13px; border-collapse:collapse;"><tr><th style="text-align:left;">Workload</th><th>Current tok/s</th><th>Tuned tok/s</th><th>Change</th></tr>${rows}</table>
+                    ${applyBtn}
+                    <details style="margin-top:8px;"><summary style="cursor:pointer;">Why (${(r.decisions || []).length} decisions)</summary><ol style="font-size:12px;">${(r.decisions || []).map(d => `<li>${tunerEsc(d)}</li>`).join('')}</ol></details>`;
+            } else { rep.style.display = 'none'; }
+            document.getElementById('tunerPlan').textContent = s.plan || 'No plan yet. "Plan on paper" shows what the tuner would try, without loading anything.';
+            document.getElementById('tunerRuns').innerHTML = (s.runs || []).map(r =>
+                `<div>${tunerEsc(r.run_id)}: ${tunerEsc(r.status)}${r.improvement != null ? ', ' + tunerPct(r.improvement) : ''}${r.applied ? ' (applied)' : ''}</div>`).join('') || 'None yet.';
+        }
+        function tunerStart() {
+            tunerLoadModels();
+            tunerRefresh();
+            if (!tunerTimer) tunerTimer = setInterval(() => {
+                if (document.getElementById('tab-optimizer').classList.contains('active')) tunerRefresh();
+            }, 3000);
         }
 
         // ---- Chat ----

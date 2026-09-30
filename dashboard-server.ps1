@@ -402,6 +402,104 @@ function Stop-ServiceByName {
 }
 
 
+# ---------------- Model Tuner integration ----------------
+$TunerRoot = Join-Path $Root 'Tools\model-tuner'
+$TunerState = Join-Path $TunerRoot 'state'
+$TunerPython = (Get-Command python -ErrorAction SilentlyContinue).Source
+
+function Test-TunerRunning {
+    $cur = Join-Path $TunerState 'current.json'
+    if (-not (Test-Path $cur)) { return $false }
+    try { $s = Get-Content $cur -Raw | ConvertFrom-Json } catch { return $false }
+    if ($s.status -notin @('running', 'starting')) { return $false }
+    return [bool](Get-Process -Id ([int]$s.pid) -ErrorAction SilentlyContinue)
+}
+
+function Start-TunerProcess {
+    param([string[]]$TunerArgs, [string]$LogName)
+    if (-not $TunerPython) { throw 'python was not found on PATH' }
+    New-Item -ItemType Directory -Force -Path $TunerState | Out-Null
+    $log = Join-Path $TunerState $LogName
+    $p = Start-Process -FilePath $TunerPython -ArgumentList (@('-m', 'modeltuner') + $TunerArgs) -WorkingDirectory $TunerRoot `
+        -WindowStyle Hidden -PassThru -RedirectStandardOutput $log -RedirectStandardError "$log.err"
+    return $p
+}
+
+function Invoke-TunerAction {
+    param($Request)
+    $action = [string]$Request.action
+    $model = [string]$Request.model
+    if ($model -and ($model -match '[\/:]' -or $model -match '\.\.' -or -not (Test-Path (Join-Path $ModelsDir $model)))) {
+        return @{ success = $false; message = "Unknown model: $model" }
+    }
+    switch ($action) {
+        'start' {
+            if (Test-TunerRunning) { return @{ success = $false; message = 'A tuning run is already in progress.' } }
+            if (-not $model) { return @{ success = $false; message = 'Pick a model first.' } }
+            $mode = [string]$Request.mode
+            if ($mode -notin @('quick', 'medium', 'full')) { $mode = 'quick' }
+            $a = @('run', $model, '--mode', $mode)
+            if ($Request.ctx) { $a += @('--ctx', [string][int]$Request.ctx) }
+            try { $p = Start-TunerProcess -TunerArgs $a -LogName 'last-run.log' }
+            catch { return @{ success = $false; message = "Could not start the tuner: $($_.Exception.Message)" } }
+            return @{ success = $true; message = "Tuning $model ($mode) started (PID $($p.Id))."; pid = $p.Id }
+        }
+        'stop' {
+            New-Item -ItemType Directory -Force -Path $TunerState | Out-Null
+            Set-Content -Path (Join-Path $TunerState 'STOP') -Value (Get-Date -Format s) -Encoding UTF8
+            return @{ success = $true; message = 'Stop requested. The run restores your model and writes its report.' }
+        }
+        'plan' {
+            if (-not $model) { return @{ success = $false; message = 'Pick a model first.' } }
+            try { $p = Start-TunerProcess -TunerArgs @('plan', $model) -LogName 'last-plan.txt' }
+            catch { return @{ success = $false; message = "Could not start the planner: $($_.Exception.Message)" } }
+            return @{ success = $true; message = "Planning $model (about 30-40 seconds, nothing is loaded)." }
+        }
+        'apply' {
+            $runId = [string]$Request.run_id
+            if ($runId -notmatch '^[\w.\-]+$' -or -not (Test-Path (Join-Path $TunerState "runs\$runId\report.json"))) {
+                return @{ success = $false; message = "Unknown run: $runId" }
+            }
+            if (-not $TunerPython) { return @{ success = $false; message = 'python was not found on PATH' } }
+            Push-Location $TunerRoot
+            $applyArgs = @('-m', 'modeltuner', 'apply', $runId, '--yes')
+            if ($Request.switchboard) { $applyArgs += '--switchboard' }
+            try { $out = & $TunerPython @applyArgs 2>&1 | Out-String } finally { Pop-Location }
+            return @{ success = ($LASTEXITCODE -eq 0); message = $out.Trim() }
+        }
+        default { return @{ success = $false; message = "Unknown action: $action" } }
+    }
+}
+
+function Get-TunerStatus {
+    $result = [ordered]@{ running = (Test-TunerRunning); current = $null; events = @(); report = $null; runs = @(); plan = '' }
+    $cur = Join-Path $TunerState 'current.json'
+    if (Test-Path $cur) {
+        try { $result.current = Get-Content $cur -Raw | ConvertFrom-Json } catch {}
+    }
+    if ($result.current -and $result.current.run_id) {
+        $runDir = Join-Path $TunerState ("runs\" + $result.current.run_id)
+        $ev = Join-Path $runDir 'events.jsonl'
+        if (Test-Path $ev) {
+            $result.events = @(Get-Content $ev -Tail 60 | ForEach-Object { try { $_ | ConvertFrom-Json } catch {} } |
+                Select-Object t, kind, msg)
+        }
+        $rj = Join-Path $runDir 'report.json'
+        if (Test-Path $rj) { try { $result.report = Get-Content $rj -Raw | ConvertFrom-Json | Select-Object run_id, model, status, mode, improvement, baseline_metrics, best_metrics, changes, decisions, notes, seconds, loads } catch {} }
+    }
+    $runsDir = Join-Path $TunerState 'runs'
+    if (Test-Path $runsDir) {
+        $result.runs = @(Get-ChildItem $runsDir -Directory | Sort-Object Name -Descending | Select-Object -First 10 | ForEach-Object {
+            $r = Join-Path $_.FullName 'report.json'
+            if (Test-Path $r) { try { $j = Get-Content $r -Raw | ConvertFrom-Json; [ordered]@{ run_id = $_.Name; model = $j.model; status = $j.status; improvement = $j.improvement; mode = $j.mode; applied = (Test-Path (Join-Path $_.FullName 'applied.json')) } } catch {} }
+            else { [ordered]@{ run_id = $_.Name; status = 'incomplete' } }
+        })
+    }
+    $plan = Join-Path $TunerState 'last-plan.txt'
+    if (Test-Path $plan) { $result.plan = (Get-Content $plan -Raw) }
+    return $result
+}
+
 function Run-QuickBenchmark {
     $results = @()
     try {
@@ -588,6 +686,29 @@ function Apply-ModelSettings {
     Save-ModelsConfig -Config $config
 
     return Start-LlamaNative -FileName $FileName -Settings $settings
+}
+
+function Start-ModelTrial {
+    # Loads a model with per-request setting overrides without writing models.json or changing activeModel.
+    # Model Tuner uses this for every trial so the user's saved settings are never touched by a test.
+    param([string]$FileName, $Overrides)
+    $modelPath = Join-Path $ModelsDir $FileName
+    if (-not (Test-Path $modelPath)) {
+        return @{ success = $false; message = "Model file not found: $FileName" }
+    }
+    $settings = Get-ModelSettingsFor -Config (Get-ModelsConfig) -FileName $FileName
+    $allowed = @((Get-ModelDefaults).Keys) + $OptionalModelKeys
+    foreach ($p in $Overrides.PSObject.Properties) {
+        if ($allowed -contains $p.Name) { $settings[$p.Name] = $p.Value }
+    }
+    # The RAM-safety flags are not optional, whatever the overrides say.
+    $extra = [string]$settings['extraArgs']
+    if ($extra -notmatch '--load-mode') { $extra = "$extra --load-mode none".Trim() }
+    if ($extra -notmatch '--cache-ram') { $extra = "$extra --cache-ram 0".Trim() }
+    $settings['extraArgs'] = $extra
+    $result = Start-LlamaNative -FileName $FileName -Settings $settings
+    $result['trial'] = $true
+    return $result
 }
 
 function Save-ModelConfigOnly {
@@ -878,31 +999,15 @@ try {
                     break
                 }
                 '^/api/optimizer$' {
-                    $script = Join-Path $Root 'model-optimize.ps1'
-                    if (-not (Test-Path $script)) {
-                        $body = (@{success=$false;message='model-optimize.ps1 not found'} | ConvertTo-Json)
-                        break
-                    }
+                    # Model Tuner (Tools/model-tuner). Actions: start | stop | plan | apply.
                     $reader = New-Object IO.StreamReader($request.InputStream)
                     $json = $reader.ReadToEnd(); $reader.Close()
-                    $mode = 'quick'
-                    if ($json) { try { $obj = $json | ConvertFrom-Json; if ($obj.mode) { $mode = [string]$obj.mode } } catch {} }
-                    if ($mode -notin @('quick','medium','full')) { $mode = 'quick' }
-                    try {
-                        $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script -Mode $mode -Json 2>&1 | Out-String
-                        $code = $LASTEXITCODE
-                        try {
-                            $result = $out.Trim() | ConvertFrom-Json
-                            $result.success = ($code -eq 0 -and [bool]$result.success)
-                            $body = ($result | ConvertTo-Json -Depth 5)
-                        } catch {
-                            # -Depth 3: $out is raw script output (a string) -- see the
-                            # ConvertTo-Json depth note on /api/scripts/status.
-                            $body = (@{success=$false;message='Optimizer returned invalid output';output=$out} | ConvertTo-Json -Depth 3)
-                        }
-                    } catch {
-                        $body = (@{success=$false;message=$_.Exception.Message} | ConvertTo-Json -Depth 10)
-                    }
+                    $obj = if ($json) { $json | ConvertFrom-Json } else { [pscustomobject]@{} }
+                    $body = (Invoke-TunerAction -Request $obj | ConvertTo-Json -Depth 6)
+                    break
+                }
+                '^/api/optimizer/status$' {
+                    $body = (Get-TunerStatus | ConvertTo-Json -Depth 8)
                     break
                 }
                 '^/api/gpu$' {
@@ -1012,7 +1117,14 @@ try {
                     $reader = New-Object IO.StreamReader($request.InputStream)
                     $json = $reader.ReadToEnd(); $reader.Close()
                     $obj = $json | ConvertFrom-Json
-                    $body = (Apply-ModelSettings -FileName ([string]$obj.filename) | ConvertTo-Json -Depth 10)
+                    $persist = $true
+                    if ($obj.PSObject.Properties.Name -contains 'persist') { $persist = [bool]$obj.persist }
+                    if (-not $persist -and $obj.settings) {
+                        # Trial load (Model Tuner): the model's saved settings with these overrides, nothing saved.
+                        $body = (Start-ModelTrial -FileName ([string]$obj.filename) -Overrides $obj.settings | ConvertTo-Json -Depth 10)
+                    } else {
+                        $body = (Apply-ModelSettings -FileName ([string]$obj.filename) | ConvertTo-Json -Depth 10)
+                    }
                     break
                 }
 

@@ -1,0 +1,6 @@
+state/
+_legacy/
+__pycache__/
+.venv/
+.pytest_cache/
+*.pyc

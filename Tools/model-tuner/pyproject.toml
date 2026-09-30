@@ -1,0 +1,19 @@
+[project]
+name = "modeltuner"
+version = "0.1.0"
+description = "Automatic, safety-first llama-server tuning for the models in C:/AI/models"
+requires-python = ">=3.13"
+dependencies = []
+
+[project.scripts]
+modeltuner = "modeltuner.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
