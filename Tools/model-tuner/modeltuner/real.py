@@ -42,22 +42,45 @@ class RealBackend:
         self.use_advisor = use_advisor and advisor.available()
 
     # ---- lifecycle ----
-    def begin(self) -> None:
+    def begin(self, exit_timeout_s: float = 180) -> None:
         """Remember what the user was running, then measure VRAM used by everything else with llama-server stopped."""
-        self._original_model = self.client.loaded_model()
-        self._original_running = self._original_model is not None
+        name = None
+        for attempt in range(3):
+            name = self.client.loaded_model()
+            if name is not None:
+                break
+            if attempt < 2:
+                time.sleep(2)
+        if name is None and llama_pid() is not None:
+            # Something holds the port but /props did not answer (busy, paging): it is still the user's server.
+            # Assume the active model so the restore brings it back rather than leaving llama-server stopped.
+            try:
+                name = self.dash.models_config().get("activeModel") or None
+            except DashboardError:
+                name = None
+            self._original_running = True
+            self.log(f"llama-server is running but did not say which model; will restore {name or 'nothing'}")
+        else:
+            self._original_running = name is not None
+        self._original_model = name
         old = llama_pid()
         self.dash.stop_llama()
         t0 = time.time()
-        while old and process_alive(old) and time.time() - t0 < 120:
-            time.sleep(1)       # never start anything while the old server is still exiting
+        while old and process_alive(old):
+            if time.time() - t0 > exit_timeout_s:
+                # AGENTS.md: if a llama-server won't exit, wait -- never go on (and never take a VRAM baseline)
+                # while it is still there. Stop the run instead; the user's model is left as it is.
+                raise safety.SafetyError(f"llama-server (PID {old}) did not exit within {exit_timeout_s:.0f}s of the "
+                                         f"stop request; not tuning while it is still there")
+            time.sleep(1)
         time.sleep(2)
         gpu = hardware.gpu()
         self._other_mib = gpu.used_mib if gpu else None
         self.log(f"VRAM used by other apps with llama-server stopped: {self._other_mib} MiB")
 
     def restore(self) -> None:
-        """Put the user's model back with its saved settings (or leave llama-server stopped if it was stopped)."""
+        """Put the user's model back with its saved settings (or leave llama-server stopped if it was stopped).
+        Best effort by design: it runs in the runner's `finally`, so nothing may escape it."""
         try:
             if self._original_running and self._original_model:
                 self.log(f"restoring {self._original_model} with its saved settings")
@@ -71,11 +94,12 @@ class RealBackend:
                     # and make it active, so bring it back the same way, without persisting anything.
                     self.dash.trial_load(self._original_model, dict(saved))
                 from modeltuner.dashboard import wait_for_model
-                wait_for_model(self.dash, self._original_model, int(saved.get("contextSize") or 0) or -1, old)
+                ctx = int(saved.get("contextSize") or 0) or None    # None: no saved context to verify against
+                wait_for_model(self.dash, self._original_model, ctx, old)
             else:
                 self.dash.stop_llama()
-        except DashboardError as e:
-            self.log(f"restore problem: {e}")
+        except Exception as e:  # noqa: BLE001 -- see docstring
+            self.log(f"restore problem: {type(e).__name__}: {e}")
 
     # ---- failure handling ----
     def _save_crash_log(self) -> str:
@@ -124,17 +148,17 @@ class RealBackend:
             from modeltuner.dashboard import wait_for_model
             pid, secs = wait_for_model(self.dash, self.model_file, cfg.ctx, old)
         except DashboardError as e:
-            msg = str(e)
-            kind = msg.split(":", 1)[0] if ":" in msg else "crash"
-            if kind not in ("oom", "crash", "timeout", "verify"):
-                kind = "refused"
+            msg, kind = str(e), e.kind
             self._loaded = None
-            if kind in ("oom", "crash"):
+            if kind in ("oom", "crash", "timeout", "verify"):
+                # Keep the log whatever the kind: the next load truncates it, and a timeout or a wrong context is
+                # exactly when the reason is otherwise lost.
                 tail = self._save_crash_log()
-                kind, msg = self._second_opinion(kind, msg, tail, cfg, proj)
+                if kind in ("oom", "crash"):
+                    kind, msg = self._second_opinion(kind, msg, tail, cfg, proj)
             raise LoadFailed(kind, msg) from e
         self.loads += 1
-        self._loaded = cfg
+        self._on_loaded(cfg)
         try:
             bench.warm_up(self.client)
         except Exception as e:  # noqa: BLE001 -- a slow first answer is not a load failure
@@ -143,24 +167,37 @@ class RealBackend:
         return LoadResult(seconds=secs, vram_used_mib=gpu.used_mib if gpu else None, vram_other_mib=self._other_mib,
                           host_avail_gb=hardware.memory().avail_gb, pid=pid, n_ctx=cfg.ctx)
 
+    def _on_loaded(self, cfg: Config) -> None:
+        """A fresh server has a fresh n-gram cache, so the prompt sequence starts over: repetition i of every load
+        sees prompt i, which keeps comparisons (including the final confirmation) on identical texts."""
+        self._loaded = cfg
+        self._counts = {}
+
     def measure(self, workload: str, *, reps: int) -> list[Sample]:
         if self._loaded is None:
             raise RuntimeError("measure() before a successful load()")
         k = (self._loaded.key(), workload)
         start = self._counts.get(k, 0)
+        # Advance before measuring: if the round fails part-way, this server may already have seen those prompts,
+        # and replaying them would let the n-gram speculator copy its earlier answers.
+        self._counts[k] = start + reps
         guard = _SpillGuard(self.dash).start()
+        fired = False
         try:
             with safety.LlamaLock():
                 out = bench.measure(self.client, workload, reps, self.power_key, start=start)
         except LlamaError as e:
-            if guard.fired:
+            fired = guard.stop()
+            if fired:
                 self._loaded = None
                 self.log(f"available RAM fell to {guard.lowest:.2f} GB during '{workload}': VRAM is spilling into "
                          f"system RAM, so this config is too big; llama-server was stopped early")
                 raise LoadFailed("spill", f"VRAM spilled into system RAM during {workload} "
                                           f"(available RAM {guard.lowest:.2f} GB)") from e
             if self.client.ready(timeout=5):
-                raise                       # the server is fine; a genuine request problem
+                # The server is up but a request did not finish in time: a slow config, not a crash. Report it as
+                # a timeout so the strategy drops this config and the run goes on.
+                raise LoadFailed("timeout", f"a {workload} request did not finish in time: {e}") from e
             # The server died mid-measurement (typically a VRAM spike). Keep its log before any reload overwrites
             # it, and report it as this config failing so the search can carry on without it.
             tail = self._save_crash_log()
@@ -170,12 +207,11 @@ class RealBackend:
             self.log(f"llama-server died during '{workload}' ({kind}); log saved as crash-{self.crashes}.log")
             raise LoadFailed(kind, msg) from e
         finally:
-            guard.stop()
-        if guard.fired:     # the stop landed between requests
+            fired = guard.stop() or fired
+        if fired:           # the stop landed between requests
             self._loaded = None
             raise LoadFailed("spill", f"VRAM spilled into system RAM during {workload} "
                                       f"(available RAM {guard.lowest:.2f} GB)")
-        self._counts[k] = start + len(out)
         return out
 
     def quality(self, suite: str, *, limit: int | None = None) -> QualityResult:
@@ -184,7 +220,18 @@ class RealBackend:
         except ImportError as e:
             raise NotImplementedError(f"quality suite {suite!r} is not installed") from e
         with safety.LlamaLock():
-            return mod.run(self.client, limit=limit, progress=lambda line: self.log(f"  [{suite}] {line}"))
+            result = mod.run(self.client, limit=limit, progress=lambda line: self.log(f"  [{suite}] {line}"))
+        # Suites record a dead server as failed tasks ("server_error"/"timeout") rather than raising. If most of the
+        # suite failed that way and the server is gone, it is a load failure, not a quality score: scoring it would
+        # make the quality gate revert settings because of a crash.
+        infra = [d for d in result.details if d.get("cause") in ("server_error", "timeout")]
+        if result.total and len(infra) * 2 >= result.total and not self.client.ready(timeout=5):
+            tail = self._save_crash_log()
+            self._loaded = None
+            kind = classify_failure(tail)
+            self.log(f"llama-server died during the {suite} suite ({kind}); log saved as crash-{self.crashes}.log")
+            raise LoadFailed(kind, f"server died during the {suite} suite")
+        return result
 
     def power_key(self) -> str:
         return hardware.power().key()
@@ -206,24 +253,36 @@ class _SpillGuard:
         self.fired = False
         self.lowest = float("inf")
         self._stop = threading.Event()
+        self._disarmed = threading.Event()
+        self._stopping = threading.Event()      # a stop_llama() call is (about to be) in flight
         self._t = threading.Thread(target=self._loop, name="spill-guard", daemon=True)
 
     def start(self) -> "_SpillGuard":
         self._t.start()
         return self
 
-    def stop(self) -> None:
+    def stop(self) -> bool:
+        """Disarm the guard and return whether it fired. If its stop request is already in flight, wait for it to
+        finish, so it cannot land later on whichever server is up by then."""
+        self._disarmed.set()
         self._stop.set()
-        self._t.join(timeout=2)
+        self._t.join(timeout=150 if self._stopping.is_set() else 2)
+        return self.fired
 
     def _loop(self) -> None:
         low_since = None
         while not self._stop.is_set():
             avail = hardware.memory().avail_gb
+            if self._disarmed.is_set():
+                return                      # the measurement ended while RAM was being read
             self.lowest = min(self.lowest, avail)
             if avail < self.floor_gb:
                 low_since = low_since or time.monotonic()
                 if time.monotonic() - low_since >= self.seconds:
+                    self._stopping.set()
+                    if self._disarmed.is_set():     # re-check after announcing, so stop() cannot miss it
+                        self._stopping.clear()
+                        return
                     self.fired = True
                     try:
                         self.dash.stop_llama()

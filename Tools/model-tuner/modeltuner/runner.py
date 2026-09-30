@@ -81,17 +81,31 @@ def run(model_file: str, opts: TuneOptions, run_id: str | None = None, use_advis
     topo = hardware.cpu()
     meta = {"mode": opts.mode, "started": time.strftime("%Y-%m-%d %H:%M:%S"), "power_key": hardware.power().key()}
 
+    hist, fp = _open_history(st, profile, run_id, opts, meta["power_key"])
+
     def on_trip(avail: float) -> None:
-        st.save(status="watchdog", message=f"RAM watchdog tripped at {avail:.2f} GB available; llama-server stopped")
+        # Runs on the watchdog thread just before the process exits: record the trip everywhere a person will look
+        # (event log, state, history), then stop llama-server quickly. The restore is deliberately skipped: loading
+        # a model while RAM is critically low is what crashed this PC.
+        msg = f"RAM watchdog tripped at {avail:.2f} GB available; llama-server stopped, your model was NOT reloaded"
         try:
-            backend.dash.stop_llama()
-        except Exception:
+            st.emit("watchdog", msg, avail_gb=round(avail, 2))
+            st.save(status="watchdog", message=msg)
+        except Exception:  # noqa: BLE001
+            pass
+        if hist is not None:
+            try:
+                hist.finish_run(run_id, "watchdog", None, {"watchdog_avail_gb": round(avail, 2)})
+            except Exception:  # noqa: BLE001
+                pass
+        try:
+            backend.dash.stop_llama(timeout=30)
+        except Exception:  # noqa: BLE001
             pass
 
     dog = safety.Watchdog(on_trip).start()
     result = None
     data: dict = {}
-    hist, fp = _open_history(st, profile, run_id, opts, meta["power_key"])
     st.save(status="running")
     try:
         backend.begin()
@@ -107,19 +121,33 @@ def run(model_file: str, opts: TuneOptions, run_id: str | None = None, use_advis
         st.save(status="failed", message=str(e))
         raise
     finally:
-        st.emit("phase", "Restoring your model and settings")
-        backend.restore()
+        tripped = getattr(dog, "tripped", False)
+        if tripped:
+            st.emit("warn", "Not reloading your model: the RAM watchdog tripped during this run.")
+        else:
+            st.emit("phase", "Restoring your model and settings")
+            try:
+                backend.restore()
+            except Exception as e:  # noqa: BLE001 -- a failed restore must not lose the report or the history
+                st.emit("error", f"restore failed: {type(e).__name__}: {e}")
         dog.stop()
+        if result is not None and tripped:
+            result.status = "watchdog"
         if result is not None:
             meta["finished"] = time.strftime("%Y-%m-%d %H:%M:%S")
-            data = report.write(st.dir, run_id, profile, result, meta)
-            st.save(status=result.status, message=f"done: {result.improvement * 100:+.1f}% overall",
+            try:
+                data = report.write(st.dir, run_id, profile, result, meta)
+            except Exception as e:  # noqa: BLE001
+                st.emit("error", f"report failed: {type(e).__name__}: {e}")
+            st.save(status=result.status, message=(f"done: {result.improvement * 100:+.1f}% overall" if not tripped
+                                                   else "stopped by the RAM watchdog"),
                     report=str(st.dir / "report.md"), improvement=result.improvement)
         if hist is not None:
             try:
-                hist.finish_run(run_id, result.status if result else "failed", result.best if result else None,
-                                {"improvement": result.improvement if result else None,
-                                 "best_metrics": result.best_metrics if result else {}})
+                if not tripped:
+                    hist.finish_run(run_id, result.status if result else "failed", result.best if result else None,
+                                    {"improvement": result.improvement if result else None,
+                                     "best_metrics": result.best_metrics if result else {}})
                 if result is not None and result.status == "ok" and result.best_metrics:
                     hist.set_best(fp, profile.file, profile.family, result.best, result.best_metrics,
                                   meta["power_key"], run_id)

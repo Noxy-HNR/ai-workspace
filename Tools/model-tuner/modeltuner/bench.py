@@ -117,7 +117,17 @@ _PREFILL_UNITS = [
     "lamplight, pencil in hand, until the eastern sky grew pale. Students copied the ledgers each morning. ",
     "The ferry crossed the strait twice a day in any weather, its engine thumping under the deck while gulls "
     "followed the wake. The captain knew every rock by name and every current by season. ",
+    "The bakery opened before dawn, when the ovens had been heating for an hour and the first trays of rye came "
+    "out dark and cracked on top. Regulars queued in the street with their own paper bags. ",
+    "The glacier retreated a few metres every summer, leaving grey gravel and meltwater ponds where the ice had "
+    "been. Surveyors hammered new stakes each August and photographed the snout from the same rock. ",
+    "The printing shop smelled of ink and machine oil; the compositor set type by hand for the weekly paper and "
+    "proofread each line backwards in the stick. The press ran through the night on Thursdays. ",
+    "The rail yard switched cars from dusk until midnight, the shunting engine pushing strings of wagons over the "
+    "hump while brakemen rode them down onto the right tracks. The yardmaster tracked it all on a chalkboard. ",
 ]
+# A run can ask for up to reps + 2 = 5 samples of one config, and a second round continues the sequence, so every
+# pool holds at least 8 distinct texts: no server is ever asked the same prompt twice.
 
 
 def _variant(workload: str, i: int) -> tuple[list[dict], int]:
