@@ -334,13 +334,18 @@ class History:
         and a crash usually repeats. Successes are not failures, so a config that was measured is never reported
         here; whether a stale failure is still believed is the caller's call, not the database's.
         """
-        marks = ",".join("?" * len(FAILURE_OUTCOMES))
+        # The latest outcome that says anything either way decides: a failure followed by a later successful load
+        # of the same config (another app has since freed the GPU, say) is stale and must not block it for ever.
+        outcomes = (*FAILURE_OUTCOMES, "loaded", "measured")
+        marks = ",".join("?" * len(outcomes))
         rows = self._rows(
             f"SELECT outcome FROM trials WHERE model_fingerprint=? AND config_key=? AND outcome IN ({marks})"
             " ORDER BY id DESC LIMIT 1",
-            (fingerprint, cfg.key(), *FAILURE_OUTCOMES),
+            (fingerprint, cfg.key(), *outcomes),
         )
-        return rows[0]["outcome"] if rows else None
+        if not rows or rows[0]["outcome"] not in FAILURE_OUTCOMES:
+            return None
+        return rows[0]["outcome"]
 
     # ------------------------------------------------------------------ measurements
     def add_samples(self, trial_id: int, samples: list[Sample]) -> None:

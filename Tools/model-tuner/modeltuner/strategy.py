@@ -30,7 +30,7 @@ from modeltuner.profile import ModelProfile
 METRIC = {"prose": "gen_tps", "code": "gen_tps", "prefill": "prompt_tps"}
 DEFAULT_WEIGHTS = {"prose": 0.45, "code": 0.35, "prefill": 0.20}
 SPEC_SIMPLICITY = {"none": 0, "ngram-mod": 1, "draft-mtp": 2, "draft-mtp,ngram-mod": 3}
-DEFAULT_MTP_OVERHEAD_MIB = 450          # until calibration has measured it for this family
+DEFAULT_MTP_OVERHEAD_MIB = 1000         # until calibrated for a family (measured 896-1210 MiB on the 9B)
 MODES = ("quick", "medium", "full")
 
 
@@ -109,6 +109,7 @@ class Tuner:
         self.history = history
         self.fingerprint = fingerprint
         self.trials: dict[str, TrialRecord] = {}
+        self._qmemo: dict[tuple, QualityResult] = {}   # (config key, suite, limit) -> result
         self.order: list[TrialRecord] = []
         self.decisions: list[str] = []
         self.notes: list[str] = []
@@ -312,8 +313,17 @@ class Tuner:
                                   f"{inc.cfg.describe()}.")
             return stats.Verdict.WORSE
         if not self.measure(inc, workloads):
+            # The incumbent itself no longer loads (e.g. it spilled earlier) and the candidate does: the candidate
+            # takes over, but say so -- it wins by default, not by measurement.
+            self.emit("decision", f"{label}: the incumbent {inc.cfg.describe()} could not be measured "
+                                  f"({inc.outcome}); {cand.cfg.describe()} takes over by default.")
             return stats.Verdict.BETTER
-        c = stats.compare(self.composite(inc, workloads), self.composite(cand, workloads))
+        a, b = self.composite(inc, workloads), self.composite(cand, workloads)
+        if not a or not b:
+            self.emit("decision", f"{label}: no comparable measurements ({', '.join(workloads)}); kept "
+                                  f"{inc.cfg.describe()}.")
+            return stats.Verdict.NEED_MORE
+        c = stats.compare(a, b)
         if c.verdict is stats.Verdict.NEED_MORE:
             self.measure(cand, workloads, reps=self.o.reps + 2)
             c = stats.compare(self.composite(inc, workloads), self.composite(cand, workloads))
@@ -379,7 +389,7 @@ class Tuner:
                                       f"the most that fits is {fitting[k]:,}.")
                     choice = (k, fitting[k])
                 else:
-                    choice = (choice[0], want)
+                    choice = (choice[0], round_ctx(want))
             else:
                 f16 = fitting.get(("f16", "f16"))
                 if f16 and f16 >= cap:
@@ -426,7 +436,8 @@ class Tuner:
 
     def phase_validate(self, cfg: Config) -> Config:
         self.emit("phase", "Validate the fit with one real load")
-        for attempt in range(6):
+        transient_tries = 0
+        for attempt in range(8):
             t = self.trial(cfg, "fit")
             if self.ensure_loaded(t):
                 used = t.load.vram_self_mib if t.load else None
@@ -442,24 +453,44 @@ class Tuner:
                                       f"budget; trimming the context to {new.ctx:,}.")
                 cfg = new
                 continue
+            if t.outcome in TRANSIENT and transient_tries < 2:
+                # A slow dashboard, a context read too early, RAM briefly short: none of that says the config does
+                # not fit, so the same config is tried again.
+                transient_tries += 1
+                self.emit("decision", f"{cfg.describe()} did not load ({t.outcome}); trying it again.")
+                t.outcome, t.reason = "pending", ""
+                continue
             if t.outcome not in ("oom", "crash", "spill"):
-                raise RuntimeError(f"could not load {cfg.describe()}: {t.reason}")
+                raise _RunFailed(f"could not load {cfg.describe()}: {t.outcome} ({t.reason})")
             # back off: context for a GPU-resident model, a few layers for a split model
             if cfg.ngl >= 999 and cfg.ctx > self.o.min_ctx:
                 new = cfg.with_(ctx=round_ctx(int(cfg.ctx * 0.85)))
             elif cfg.ngl < 999 and cfg.ngl > 0:
                 new = cfg.with_(ngl=max(0, cfg.ngl - 2))
             else:
-                raise RuntimeError(f"nothing fits: {t.reason}")
+                raise _RunFailed(f"nothing fits: {t.reason}")
             self.fit_error += 256
             self.emit("decision", f"{cfg.describe()} failed to load ({t.outcome}); backing off to {new.describe()}.")
             cfg = new
-        raise RuntimeError("could not find a config that loads after 6 attempts")
+        raise _RunFailed("could not find a config that loads after 8 attempts")
 
     def phase_baseline(self, fitted: Config) -> TrialRecord:
         self.emit("phase", "Measure the current settings (the baseline)")
         workloads = [w for w in self.o.weights if self.o.weights[w] > 0]
         bt = self.trial(self.baseline, "baseline")
+        if self.baseline.key() != fitted.key() and not self.fits(self.baseline):
+            # Loading an over-budget config on purpose would spill VRAM into system RAM (how the watchdog tripped
+            # on 2026-09-30). Measure the fitted config as the baseline instead.
+            pr = self.project(self.baseline)
+            self.emit("note", f"Your current settings are projected at "
+                              f"{(pr.device_self_mib + self.overhead(self.baseline)) if pr else '?'} MiB, over the "
+                              f"{self.budget} MiB VRAM budget right now, so they were not loaded; the fitted config "
+                              f"is the baseline instead.")
+            bt.outcome, bt.reason = "skipped", "over the VRAM budget"
+            ft = self.trial(fitted, "fit")
+            self.measure(ft, workloads)
+            self.ref = ft.medians()
+            return ft
         if self.baseline.key() == fitted.key() or self.measure(bt, workloads):
             if self.baseline.key() == fitted.key():
                 self.measure(bt, workloads)
@@ -510,9 +541,9 @@ class Tuner:
         # Try first in the direction where a sibling model (same family) found its best value.
         directions = (+1, -1)
         prior = self.family_prior(field_name)
-        if prior is not None and prior != cur and prior in values and values.index(prior) < idx:
-            directions = (-1, +1)
-        if prior is not None and prior != cur:
+        if prior is not None and prior != cur and prior in values:
+            if values.index(prior) < idx:
+                directions = (-1, +1)
             self.emit("note", f"{label}: a model of the same family did best at {prior}; searching that way first.")
         for direction in directions:
             j = idx + direction
@@ -535,7 +566,8 @@ class Tuner:
             self.emit("decision", f"{label}: kept {cur}{' (the server default)' if getattr(start.cfg, field_name) is None else ''} "
                                   f"(neighbours were not clearly better).")
         else:
-            self.emit("decision", f"{label}: {cur} -> {getattr(inc.cfg, field_name)}.")
+            was = f"unset (server default {cur})" if getattr(start.cfg, field_name) is None else str(cur)
+            self.emit("decision", f"{label}: {was} -> {getattr(inc.cfg, field_name)}.")
         return inc
 
     def phase_spec_params(self, inc: TrialRecord) -> TrialRecord:
@@ -546,8 +578,10 @@ class Tuner:
                               default=3)
         if inc.cfg.uses_ngram:
             self.emit("phase", "N-gram match length")
-            inc = self.search(inc, "ngram match", [4, 6, 8, 12, 16, 24], "ngram_n_match", ["code"], "spec-params",
-                              default=24)
+            ng_workloads = ["code"] if "code" in self.ref else [w for w in ("prose",) if w in self.ref]
+            if ng_workloads:
+                inc = self.search(inc, "ngram match", [4, 6, 8, 12, 16, 24], "ngram_n_match", ng_workloads,
+                                  "spec-params", default=24)
         return inc
 
     def phase_batch(self, inc: TrialRecord) -> TrialRecord:
@@ -604,35 +638,66 @@ class Tuner:
         if self.p.template_has_thinking:
             inc = self._tune_thinking(inc)
         suites = ["reasoning", "tools"] + (["coding", "recall"] if self.o.mode == "full" else [])
-        limit = None if self.o.mode == "full" else 8
+        limit = self.quality_limit
+        if limit is not None and _q4(inc.cfg) and not _q4(base.cfg):
+            # A 4-bit KV cache is a known quality risk, and an 8-task screen cannot see a few points of loss (one
+            # task is 12.5 points). Gate it on whole suites instead.
+            limit = None
+            self.emit("note", "The candidate uses a 4-bit KV cache, so the quality gates run the whole suites.")
         for suite in suites:
             if suite == "tools" and not self.p.template_supports_tools:
                 continue
+            if inc is base:
+                break                       # nothing left to gate: the candidate is the baseline
             r_new = self._quality(inc, suite, limit)
             r_old = self._quality(base, suite, limit)
             if r_new is None or r_old is None:
                 continue
-            if r_new.total == r_old.total:
-                drop = r_old.passed - r_new.passed
-            else:   # e.g. long-context tasks skipped at a smaller context: compare rates on the old scale
-                drop = round((r_old.rate - r_new.rate) * r_old.total)
-            allowed = max(1, round(0.1 * r_old.total))
             self.emit("compare", f"quality {suite}: {r_new.passed}/{r_new.total} vs baseline "
                                  f"{r_old.passed}/{r_old.total}")
-            if drop > allowed:
-                self.emit("decision", f"Quality gate: {suite} dropped by {drop} tasks; reverting cache type and "
-                                      f"thinking settings to the baseline's.")
-                cfg = inc.cfg.with_(cache_k=base.cfg.cache_k, cache_v=base.cfg.cache_v,
-                                    reasoning_budget=base.cfg.reasoning_budget,
-                                    reasoning_effort=base.cfg.reasoning_effort)
-                if cfg.key() != inc.cfg.key() and self.fits(cfg):
-                    inc = self.trial(cfg, "quality")
-                    self.measure(inc, [w for w in self.ref])
+            if not self._quality_dropped(r_new, r_old):
+                continue
+            # DESIGN: a config whose quality drops beyond noise is rejected however fast it is. First try the one
+            # repair that keeps the speed gains (the baseline's cache type and thinking settings) and gate it again;
+            # if that is impossible or still fails, the candidate is rejected and the baseline stays.
+            cfg = inc.cfg.with_(cache_k=base.cfg.cache_k, cache_v=base.cfg.cache_v,
+                                reasoning_budget=base.cfg.reasoning_budget,
+                                reasoning_effort=base.cfg.reasoning_effort)
+            repaired = None
+            if cfg.key() != inc.cfg.key() and self.fits(cfg):
+                rt = self.trial(cfg, "quality")
+                r_rep = self._quality(rt, suite, limit)
+                if r_rep is not None and not self._quality_dropped(r_rep, r_old) and self.measure(rt, list(self.ref)):
+                    repaired = rt
+            if repaired is not None:
+                self.emit("decision", f"Quality gate: {suite} dropped ({r_new.passed}/{r_new.total} vs "
+                                      f"{r_old.passed}/{r_old.total}); reverting cache type and thinking settings "
+                                      f"to the baseline's fixed it ({repaired.cfg.describe()}).")
+                inc = repaired
+            else:
+                self.emit("decision", f"Quality gate: {suite} dropped ({r_new.passed}/{r_new.total} vs "
+                                      f"{r_old.passed}/{r_old.total}) and no repair kept the quality; the candidate "
+                                      f"is rejected and your current settings stay.")
+                inc = base
         return inc
 
+    @property
+    def quality_limit(self) -> int | None:
+        return None if self.o.mode == "full" else 8
+
+    @staticmethod
+    def _quality_dropped(r_new: QualityResult, r_old: QualityResult) -> bool:
+        """More than 10% of the suite (at least one task) worse, compared at the same suite size."""
+        if r_new.total == r_old.total:
+            drop = r_old.passed - r_new.passed
+        else:   # long-context tasks skipped at a smaller context: compare rates on the old scale
+            drop = round((r_old.rate - r_new.rate) * r_old.total)
+        return drop > max(1, round(0.1 * r_old.total))
+
     def _quality(self, t: TrialRecord, suite: str, limit: int | None) -> QualityResult | None:
-        if suite in t.quality:
-            return t.quality[suite]
+        memo = (t.cfg.key(), suite, limit)
+        if memo in self._qmemo:
+            return self._qmemo[memo]
         if not self.ensure_loaded(t):
             return None
         for attempt in range(2):
@@ -653,6 +718,7 @@ class Tuner:
             if not self.ensure_loaded(t):
                 return None
         t.quality[suite] = r
+        self._qmemo[memo] = r
         tid = self._hist_trial(t)
         if tid is not None:
             self._hist("add_quality", tid, r)
@@ -661,6 +727,10 @@ class Tuner:
         return r
 
     def _tune_thinking(self, inc: TrialRecord) -> TrialRecord:
+        """Pick the thinking cap (or effort) on quality, then tokens. It is not speed-checked on purpose: the speed
+        workloads run with thinking disabled, so on llama.cpp these settings cannot change the measured decode or
+        prefill speed; they only change how long the model thinks, which the token count already captures.
+        (Declined finding 1 of the 2026-09-30 strategy review, which only reproduces in the simulator.)"""
         if self.p.template_honours_effort:
             options = [("reasoning_effort", v) for v in ("low", "medium", "high", "xhigh")]
             what = "reasoning effort"
@@ -671,7 +741,7 @@ class Tuner:
         for fld, val in options:
             cfg = inc.cfg.with_(**{fld: val})
             t = self.trial(cfg, "thinking")
-            r = self._quality(t, "reasoning", None)
+            r = self._quality(t, "reasoning", self.quality_limit)
             if r is not None:
                 results.append((r.passed, -r.tokens, t, val))
         if not results:
@@ -684,16 +754,25 @@ class Tuner:
                               f"the reasoning set; the leanest setting with the best score).")
         return pick[2]
 
-    def phase_confirm(self, best: TrialRecord, base: TrialRecord) -> dict[str, float]:
-        self.emit("phase", "Confirm the winner with a fresh load")
+    def phase_confirm(self, best: TrialRecord, base: TrialRecord) -> tuple[dict[str, float], dict[str, float]]:
+        """Fresh loads of the winner and of the baseline, back to back, so the headline number compares two
+        measurements from the same stretch of time (clocks and background load drift over a long run)."""
+        self.emit("phase", "Confirm the winner against the baseline with fresh loads")
         workloads = [w for w in self.ref]
-        fresh = TrialRecord(cfg=best.cfg, phase="confirm")
-        self.loaded_key = None                  # force a reload
-        self.order.append(fresh)
-        if not self.measure(fresh, workloads, reps=self.o.reps):
-            self.emit("warn", "the winner failed to reload for confirmation; reporting its earlier numbers")
-            return best.medians()
-        return fresh.medians()
+        out = []
+        for t, name in ((best, "winner"), (base, "baseline")):
+            if name == "baseline" and base.cfg.key() == best.cfg.key():
+                out.append(out[0])
+                break
+            fresh = TrialRecord(cfg=t.cfg, phase="confirm")
+            self.loaded_key = None                  # force a reload
+            self.order.append(fresh)
+            if self.measure(fresh, workloads, reps=self.o.reps):
+                out.append(fresh.medians())
+            else:
+                self.emit("warn", f"the {name} failed to reload for confirmation; using its earlier numbers")
+                out.append(t.medians())
+        return out[0], out[1]
 
     # ------------------------------------------------------------------ main
     def run(self, topo: tuple[int, int] | None = None) -> TuneResult:
@@ -702,6 +781,7 @@ class Tuner:
         best: TrialRecord | None = None
         base: TrialRecord | None = None
         confirmed: dict[str, float] = {}
+        confirmed_base: dict[str, float] = {}
         self.emit("note", f"Mode: {self.o.mode}. Power state: {self.power_key}.")
         try:
             fitted = self.phase_fit()
@@ -732,19 +812,22 @@ class Tuner:
                         self.emit("decision", f"The previous run's best ({pcfg.describe()}) is still the leader; "
                                               f"searching from it.")
                         inc = pt
-            inc = self.phase_spec(inc)
-            inc = self.phase_spec_params(inc)
-            inc = self.phase_batch(inc)
-            inc = self.phase_threads(inc, topo)
-            inc = self.phase_quality(inc, base)
             best = inc
-            confirmed = self.phase_confirm(best, base)
+            best = inc = self.phase_spec(inc)
+            best = inc = self.phase_spec_params(inc)
+            best = inc = self.phase_batch(inc)
+            best = inc = self.phase_threads(inc, topo)
+            best = inc = self.phase_quality(inc, base)
+            confirmed, confirmed_base = self.phase_confirm(best, base)
         except _Budget:
-            status = "ok"
-            self.emit("note", f"Load budget ({self.o.max_loads}) reached; stopping the search with the best so far.")
-            best = best or max((t for t in self.order if t.outcome == "measured"),
-                               key=lambda t: stats.median(self.composite(t, list(self.ref))) if self.composite(t, list(self.ref)) else 0,
-                               default=None)
+            # Not "ok": whatever phase was cut short (a quality gate, say) did not finish, so this result must not be
+            # recorded as the model's best.
+            status = "budget"
+            self.emit("note", f"Load budget ({self.o.max_loads}) reached; stopping with the best so far, which did "
+                              f"not finish every phase.")
+        except _RunFailed as e:
+            status = "failed"
+            self.emit("note", f"Could not continue: {e}")
         except Stopped:
             status = "stopped"
             self.emit("note", "Stopped on request.")
@@ -752,7 +835,7 @@ class Tuner:
             status = "power_changed"
             self.emit("note", f"Stopped: {e}. Results are not comparable; run again in one power state.")
         best = best or base
-        base_metrics = base.medians() if base else {}
+        base_metrics = confirmed_base or (base.medians() if base else {})
         best_metrics = confirmed or (best.medians() if best else {})
         imp = stats.relative_score(best_metrics, base_metrics, self.o.weights) if best and base else 0.0
         if best is None:
@@ -770,6 +853,17 @@ class Tuner:
 
 class _Budget(Exception):
     pass
+
+
+class _RunFailed(Exception):
+    """Nothing loadable was found (or loads kept failing): end the run with status "failed" and what it had."""
+
+
+TRANSIENT = ("timeout", "refused", "verify", "ram")
+
+
+def _q4(cfg: Config) -> bool:
+    return any(c.startswith(("q4", "iq4")) for c in (cfg.cache_k, cfg.cache_v))
 
 
 def interruption(r: QualityResult, key_before: str, key_after: str) -> str | None:
