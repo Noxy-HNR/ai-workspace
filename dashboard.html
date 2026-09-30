@@ -870,6 +870,7 @@
                 { name: 'llama-server', port: 10000, url: 'http://127.0.0.1:10000', desc: 'LLM inference engine', icon: '🧠' },
                 { name: 'cptr', port: 8000, url: 'http://127.0.0.1:8000', desc: 'Agent controller / MCP server', icon: '🕹️' },
                 { name: 'switchboard', port: 8002, url: 'http://127.0.0.1:8002', desc: 'Intelligent model routing and agent supervision (starts independently of llama-server)', icon: '🔀' },
+                { name: 'telegram-bot', title: 'Relay Station / Telegram Bot', port: 9095, url: 'http://127.0.0.1:9095', desc: 'Telegram conversations, reply queue, access controls, and bot settings', icon: '✈️' },
                 { name: 'oura-mcp', port: null, url: null, desc: 'Personal health data MCP server', icon: '💍' },
             ];
 
@@ -877,15 +878,16 @@
             for (const svc of serviceList) {
                 const svcData = services[svc.name] || { running: false };
                 const status = svcData.running;
-                const badgeClass = status ? 'badge-running' : 'badge-stopped';
-                const statusText = status ? 'Running' : 'Stopped';
+                const pendingReady = svc.name === 'telegram-bot' && status && svcData.ready === false;
+                const badgeClass = pendingReady ? 'badge-starting' : (status ? 'badge-running' : 'badge-stopped');
+                const statusText = pendingReady ? 'Starting' : (status ? 'Running' : 'Stopped');
                 const port = svc.port || svcData.port || '--';
                 const url = svc.url || (svcData.port ? `http://127.0.0.1:${svcData.port}` : null);
 
                 html += `
                     <div class="service-card ${status ? 'is-running' : 'is-stopped'}" data-service="${svc.name}">
                         <div class="service-header">
-                            <span class="service-name">${svc.name}</span>
+                            <span class="service-name">${svc.title || svc.name}</span>
                             <span class="service-badge ${badgeClass}">${statusText}</span>
                         </div>
                         <div style="font-size:12px;color:var(--text-secondary);margin:-8px 0 8px;">${svc.desc}</div>
@@ -902,6 +904,11 @@
                                 <span>PID</span>
                                 <span>${svcData.pid || '--'}</span>
                             </div>
+                            ${svc.name === 'telegram-bot' ? `
+                            <div class="service-detail-row">
+                                <span>Console</span>
+                                <span>${svcData.ready ? 'Ready' : (status ? 'Waiting for startup' : 'Offline')}</span>
+                            </div>` : ''}
                             ${svc.name === 'oura-mcp' ? `
                             <div class="service-detail-row">
                                 <span>Oura authorized</span>
@@ -915,6 +922,7 @@
                                 : `<button class="btn btn-sm btn-primary" onclick="controlService('${svc.name}','start')">▶ Start</button>`
                             }
                             <button class="btn btn-sm btn-warning" onclick="controlService('${svc.name}','restart')">↻ Restart</button>
+                            ${svc.name === 'telegram-bot' ? `<a class="btn btn-sm btn-info" href="${url}" target="_blank" rel="noopener noreferrer">Open console ↗</a>` : ''}
                             ${svc.name === 'llama-server' ? `<button class="btn btn-sm btn-info" onclick="listModels()">Models</button>` : ''}
                             ${svc.name === 'oura-mcp' && url ? `<button class="btn btn-sm" onclick="window.open('${url}/oauth/start','_blank')">Authorize</button>` : ''}
                         </div>
@@ -962,6 +970,32 @@
                 if (data.success) {
                     addFeedback(`${data.message}`, 'success');
                     if (action === 'start' || action === 'restart') {
+                        if (name === 'telegram-bot') {
+                            // Relay Station rejects cross-origin API requests. The
+                            // dashboard probes its /api/health endpoint locally and
+                            // exposes readiness through the same status API used above.
+                            let ready = false;
+                            for (let waited = 0; waited < 90; waited += 2) {
+                                await new Promise(r => setTimeout(r, 2000));
+                                try {
+                                    const statusResp = await fetch(`${DASHBOARD_API}/api/status`, { signal: AbortSignal.timeout(5000) });
+                                    if (!statusResp.ok) continue;
+                                    const service = (await statusResp.json()).services?.['telegram-bot'];
+                                    if (service?.ready) {
+                                        addFeedback('Relay Station console is ready on port 9095.', 'success');
+                                        ready = true;
+                                        break;
+                                    }
+                                    if (service?.error) {
+                                        addFeedback(`Relay Station: ${service.error}`, 'error');
+                                        break;
+                                    }
+                                } catch {}
+                            }
+                            if (!ready) addFeedback('Relay Station is not ready yet. Check its service status and startup log.', 'warn');
+                            await refreshAll();
+                            return;
+                        }
                         // Look up this service's actual port (oura-mcp's port can be
                         // customized in oura.env) then wait for it to come up.
                         let port = name === 'llama-server' ? 10000 : (name === 'cptr' ? 8000 : (name === 'switchboard' ? 8002 : null));

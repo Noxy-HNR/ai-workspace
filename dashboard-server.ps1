@@ -15,6 +15,10 @@ $SwitchboardHost = 'http://127.0.0.1:8002'
 $SwitchboardRoot = Join-Path $Root 'Switchboard'
 $SwitchboardStart = Join-Path $SwitchboardRoot 'scripts\start.ps1'
 $SwitchboardStop = Join-Path $SwitchboardRoot 'scripts\stop.ps1'
+$TelegramRoot = Join-Path $Root 'TelegramBot'
+$TelegramStart = Join-Path $TelegramRoot 'start-telegram-bot.ps1'
+$TelegramStop = Join-Path $TelegramRoot 'stop-telegram-bot.ps1'
+. (Join-Path $TelegramRoot 'service-management.ps1')
 $DashboardFile = Join-Path $Root 'dashboard.html'
 $LogDir = Join-Path $Root 'Logs'
 $ModelsDir = Join-Path $Root 'models'
@@ -196,6 +200,7 @@ function Get-ServiceStatus {
                 url = $SwitchboardHost
                 error = if (-not $switchboardUp -and $switchboardPid) { 'Port 8002 is listening, but Switchboard health is not responding' } elseif (-not $switchboardUp) { 'Switchboard is not responding' } else { '' }
             }
+            'telegram-bot' = (Get-RelayServiceStatus -Port 9095)
             'oura-mcp' = @{
                 running = $ouraUp
                 pid = $ouraPid
@@ -312,6 +317,29 @@ function Start-LlamaNative {
 function Start-ServiceByName {
     param([string]$Name)
     switch ($Name) {
+        'telegram-bot' {
+            if (-not (Test-Path -LiteralPath $TelegramStart)) {
+                return @{success=$false;message='Relay Station launcher is missing.'}
+            }
+            $current = Get-RelayServiceStatus -Port 9095
+            if ($current.ready) {
+                # Adopt only a verified bot command/console, so Stop can also
+                # manage the older instance that predates the PID record.
+                $process = Get-RelayPortProcess -Port 9095
+                try { Save-RelayInstance -Process $process -Port 9095 -AllowLegacy }
+                catch { return @{success=$false;message=$_.Exception.Message} }
+                return @{success=$true;message='Relay Station is already running.'}
+            }
+            if ($current.pid) { return @{success=$false;message='Port 9095 belongs to an unrecognized or unready process.'} }
+            $stamp = Get-Date -Format 'yyyyMMdd-HHmmss-fff'
+            try {
+                $p = Start-Process -FilePath 'powershell.exe' -WindowStyle Hidden -PassThru -WorkingDirectory $TelegramRoot `
+                    -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',$TelegramStart) `
+                    -RedirectStandardOutput (Join-Path $ScriptsLogDir "telegram-$stamp-out.log") `
+                    -RedirectStandardError (Join-Path $ScriptsLogDir "telegram-$stamp-error.log")
+                return @{success=$true;message="Relay Station starting (launcher PID $($p.Id))."}
+            } catch { return @{success=$false;message="Failed to start Relay Station: $($_.Exception.Message)"} }
+        }
         'llama-server' {
             $config = Get-ModelsConfig
             if ([string]::IsNullOrWhiteSpace($config.activeModel)) {
@@ -368,6 +396,17 @@ function Start-ServiceByName {
 function Stop-ServiceByName {
     param([string]$Name)
     switch ($Name) {
+        'telegram-bot' {
+            if (-not (Test-Path -LiteralPath $TelegramStop)) {
+                return @{success=$false;message='Relay Station stop script is missing.'}
+            }
+            try {
+                $output = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $TelegramStop -Force 2>&1
+                if ($LASTEXITCODE -ne 0) { return @{success=$false;message=($output | Out-String).Trim()} }
+                if (Get-RelayPortProcess -Port 9095) { return @{success=$false;message='Relay Station has not stopped; restart refused.'} }
+                return @{success=$true;message=($output | Out-String).Trim()}
+            } catch { return @{success=$false;message="Failed to stop Relay Station: $($_.Exception.Message)"} }
+        }
         'llama-server' { return Stop-LlamaNative }
         'cptr' {
             $cptrPid = Get-PortPid 8000
@@ -989,6 +1028,10 @@ try {
                     $obj = $json | ConvertFrom-Json
                     $svcName = [string]$obj.service
                     $stopResult = Stop-ServiceByName $svcName
+                    if ($svcName -eq 'telegram-bot' -and -not $stopResult.success) {
+                        $body = ($stopResult | ConvertTo-Json -Depth 10)
+                        break
+                    }
                     Start-Sleep -Milliseconds 500
                     $startResult = Start-ServiceByName $svcName
                     $body = (@{ success = [bool]$startResult.success; message = "Stopped: $($stopResult.message) | $($startResult.message)" } | ConvertTo-Json -Depth 10)
