@@ -465,6 +465,8 @@ def load_legacy_tasks() -> dict:
     the legacy harness ran it too.
     """
     legacy = ROOT / "_legacy" / "codeeval"
+    if not (legacy / "tasks_a.py").exists():
+        pytest.skip("_legacy/codeeval is not present (it is not in git)")
     saved = {name: sys.modules.pop(name, None) for name in ("tasks_a", "tasks_b")}
     sys.path.insert(0, str(legacy))
     try:
