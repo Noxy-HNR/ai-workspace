@@ -64,6 +64,11 @@ def _jsonable(v) -> bool:
 def run(model_file: str, opts: TuneOptions, run_id: str | None = None, use_advisor: bool = True,
         allow_battery: bool = False) -> dict:
     paths.ensure_state_dirs()
+    with safety.RunLock():
+        return _run(model_file, opts, run_id, use_advisor, allow_battery)
+
+
+def _run(model_file: str, opts: TuneOptions, run_id: str | None, use_advisor: bool, allow_battery: bool) -> dict:
     safety.refuse_if_tripped()
     power = hardware.power()
     if power.on_ac is False and not allow_battery:

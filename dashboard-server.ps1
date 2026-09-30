@@ -446,7 +446,12 @@ $TunerRoot = Join-Path $Root 'Tools\model-tuner'
 $TunerState = Join-Path $TunerRoot 'state'
 $TunerPython = (Get-Command python -ErrorAction SilentlyContinue).Source
 
+$script:TunerLaunchPid = $null
+
 function Test-TunerRunning {
+    # The tuner writes current.json only once it has started (a second or two after launch), so the process this
+    # dashboard launched counts as running too: a double-click on Start must not launch two tuners.
+    if ($script:TunerLaunchPid -and (Get-Process -Id $script:TunerLaunchPid -ErrorAction SilentlyContinue)) { return $true }
     $cur = Join-Path $TunerState 'current.json'
     if (-not (Test-Path $cur)) { return $false }
     try { $s = Get-Content $cur -Raw | ConvertFrom-Json } catch { return $false }
@@ -479,7 +484,7 @@ function Invoke-TunerAction {
             if ($mode -notin @('quick', 'medium', 'full')) { $mode = 'quick' }
             $a = @('run', $model, '--mode', $mode)
             if ($Request.ctx) { $a += @('--ctx', [string][int]$Request.ctx) }
-            try { $p = Start-TunerProcess -TunerArgs $a -LogName 'last-run.log' }
+            try { $p = Start-TunerProcess -TunerArgs $a -LogName 'last-run.log'; $script:TunerLaunchPid = $p.Id }
             catch { return @{ success = $false; message = "Could not start the tuner: $($_.Exception.Message)" } }
             return @{ success = $true; message = "Tuning $model ($mode) started (PID $($p.Id))."; pid = $p.Id }
         }
@@ -490,6 +495,7 @@ function Invoke-TunerAction {
         }
         'plan' {
             if (-not $model) { return @{ success = $false; message = 'Pick a model first.' } }
+            if (Test-TunerRunning) { return @{ success = $false; message = 'A tuning run is in progress; plan when it finishes.' } }
             try { $p = Start-TunerProcess -TunerArgs @('plan', $model) -LogName 'last-plan.txt' }
             catch { return @{ success = $false; message = "Could not start the planner: $($_.Exception.Message)" } }
             return @{ success = $true; message = "Planning $model (about 30-40 seconds, nothing is loaded)." }
@@ -516,7 +522,12 @@ function Get-TunerStatus {
     if (Test-Path $cur) {
         try { $result.current = Get-Content $cur -Raw | ConvertFrom-Json } catch {}
     }
-    if ($result.current -and $result.current.run_id) {
+    if ($result.current -and $result.current.status -in @('running', 'starting') -and -not $result.running) {
+        # current.json still says running, but no tuner process is alive: it crashed or was killed.
+        $result.current.status = 'interrupted'
+        $result.current.message = 'The tuning process is no longer running (it stopped without finishing).'
+    }
+    if ($result.current -and $result.current.run_id -and ([string]$result.current.run_id) -match '^[\w.\-]+$') {
         $runDir = Join-Path $TunerState ("runs\" + $result.current.run_id)
         $ev = Join-Path $runDir 'events.jsonl'
         if (Test-Path $ev) {
@@ -736,6 +747,10 @@ function Start-ModelTrial {
         return @{ success = $false; message = "Model file not found: $FileName" }
     }
     $settings = Get-ModelSettingsFor -Config (Get-ModelsConfig) -FileName $FileName
+    $overrideExtra = [string]$Overrides.extraArgs
+    if ($overrideExtra -match '(^|\s)(-m|--model|-md|--model-draft|--spec-draft-model|--mmproj|--lora|--lora-scaled|-hf|-hfr|--hf-repo|--hf-file|--host|--port)(=|\s|$)') {
+        return @{ success = $false; message = "Trial extraArgs may not choose the model, a LoRA, or the host/port: $overrideExtra" }
+    }
     $allowed = @((Get-ModelDefaults).Keys) + $OptionalModelKeys
     foreach ($p in $Overrides.PSObject.Properties) {
         if ($allowed -contains $p.Name) { $settings[$p.Name] = $p.Value }
@@ -1160,6 +1175,11 @@ try {
                     $reader = New-Object IO.StreamReader($request.InputStream)
                     $json = $reader.ReadToEnd(); $reader.Close()
                     $obj = $json | ConvertFrom-Json
+                    $loadName = [string]$obj.filename
+                    if ([string]::IsNullOrWhiteSpace($loadName) -or $loadName -match '[\\/:]' -or $loadName -match '\.\.') {
+                        $body = (@{ success = $false; message = "Not a model file name: $loadName" } | ConvertTo-Json)
+                        break
+                    }
                     $persist = $true
                     if ($obj.PSObject.Properties.Name -contains 'persist') { $persist = [bool]$obj.persist }
                     if (-not $persist -and $obj.settings) {

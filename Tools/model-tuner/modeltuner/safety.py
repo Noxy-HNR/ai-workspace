@@ -120,3 +120,56 @@ class LlamaLock:
             self.path.unlink()
         except FileNotFoundError:
             pass
+
+
+class RunLock:
+    """One tuning run at a time, whoever starts it (the dashboard, the CLI, a script). Created atomically with the
+    running process's PID; a lock left by a process that no longer exists is taken over."""
+
+    def __init__(self, path: Path | None = None):
+        self.path = path or (paths.STATE_DIR / "RUN.lock")
+        self.held = False
+
+    def __enter__(self) -> "RunLock":
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        for _ in range(2):
+            try:
+                fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            except FileExistsError:
+                try:
+                    other = int(self.path.read_text(encoding="utf-8").split()[0])
+                except (OSError, ValueError, IndexError):
+                    other = None
+                if other and other != os.getpid() and _pid_alive(other):
+                    raise SafetyError(f"another tuning run is in progress (PID {other})")
+                try:
+                    self.path.unlink()          # stale: its process is gone
+                except FileNotFoundError:
+                    pass
+                continue
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(f"{os.getpid()} {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+            self.held = True
+            return self
+        raise SafetyError("could not take the run lock")
+
+    def __exit__(self, *exc) -> None:
+        if self.held:
+            try:
+                self.path.unlink()
+            except FileNotFoundError:
+                pass
+            self.held = False
+
+
+def _pid_alive(pid: int) -> bool:
+    import ctypes
+    handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)   # PROCESS_QUERY_LIMITED_INFORMATION
+    if not handle:
+        return False
+    try:
+        code = ctypes.c_ulong()
+        ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(code))
+        return code.value == 259                                        # STILL_ACTIVE
+    finally:
+        ctypes.windll.kernel32.CloseHandle(handle)

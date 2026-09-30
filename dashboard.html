@@ -914,7 +914,7 @@
                                 <span>Oura authorized</span>
                                 <span style="color:${svcData.authorized ? 'var(--accent-green)' : 'var(--accent-yellow)'}">${svcData.authorized ? 'Yes' : 'No'}</span>
                             </div>` : ''}
-                            ${svcData.error ? `<div class="service-detail-row"><span style="color:var(--accent-red)">Error</span><span style="font-size:11px;color:var(--accent-red)">${svcData.error}</span></div>` : ''}
+                            ${svcData.error ? `<div class="service-detail-row"><span style="color:var(--accent-red)">Error</span><span style="font-size:11px;color:var(--accent-red)">${escapeHtml(svcData.error)}</span></div>` : ''}
                         </div>
                         <div class="service-actions">
                             ${status
