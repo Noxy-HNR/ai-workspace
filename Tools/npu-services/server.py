@@ -18,7 +18,8 @@ class Handler(BaseHTTPRequestHandler):
                 and not self.headers.get('Origin'))
     def do_GET(self):
         if not self.allowed():return self.reply({'error':'Local clients only'},403)
-        self.reply({'devices':{'embedding':runtime_module.EMBEDDING_DEVICE,'person':runtime_module.PERSON_DEVICE},
+        self.reply({'devices':{'embedding':runtime_module.EMBEDDING_DEVICE,'objects':runtime_module.OBJECT_DEVICE,
+                               'person':runtime_module.OBJECT_DEVICE},
                     'service':'project-npu','loaded':list(runtime.models)})
     def do_POST(self):
         if not self.allowed() or self.headers.get('X-NPU-Client')!='1':
