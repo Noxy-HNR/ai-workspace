@@ -49,6 +49,12 @@ SEED_ITEMS = ["modeltuner", "tests", "DESIGN.md", "pyproject.toml", "devtools/SN
 IGNORE = shutil.ignore_patterns("__pycache__", ".pytest_cache", "*.pyc", ".venv")
 
 _lock = threading.Lock()
+NOWIN = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+# OpenCode's standalone servers fail to start when several launch in the same moment
+# ("Standalone server exited before reporting readiness"), so launches are spaced out.
+_launch_lock = threading.Lock()
+_last_launch = [0.0]
+LAUNCH_GAP_S = 15
 
 
 def log(msg: str) -> None:
@@ -92,6 +98,34 @@ def loaded_model() -> str | None:
         return Path(_get(LLAMA + "/props", 10)["model_path"]).name
     except Exception:
         return None
+
+
+class _PWR(ctypes.Structure):
+    _fields_ = [("ac", ctypes.c_ubyte), ("flag", ctypes.c_ubyte), ("pct", ctypes.c_ubyte), ("saver", ctypes.c_ubyte),
+                ("life", ctypes.c_ulong), ("full", ctypes.c_ulong)]
+
+
+def on_battery() -> bool:
+    s = _PWR()
+    ctypes.windll.kernel32.GetSystemPowerStatus(ctypes.byref(s))
+    return s.ac == 0
+
+
+def tuner_running() -> bool:
+    cur = PROJECT / "state" / "current.json"
+    try:
+        return json.loads(cur.read_text(encoding="utf-8")).get("status") in ("running", "starting")
+    except Exception:
+        return False
+
+
+def local_blocked() -> str | None:
+    """Why a local-model job must wait right now, or None."""
+    if LLAMA_LOCK.exists() or tuner_running():
+        return "a Model Tuner run is using llama-server"
+    if on_battery():
+        return "on battery (local jobs would drain it)"
+    return None
 
 
 def loaded_ctx() -> int | None:
@@ -186,9 +220,9 @@ def seed_workdir(job: Job, attempt: int) -> Path:
     for extra in job.dir.glob("*"):
         if extra.is_file() and extra.name not in ("job.json", "result.json"):
             shutil.copy2(extra, wd / extra.name)
-    subprocess.run(["git", "init", "-q"], cwd=wd)
-    subprocess.run(["git", "add", "-A"], cwd=wd)
-    subprocess.run(["git", "-c", "user.name=seed", "-c", "user.email=seed@local", "commit", "-qm", "seed"], cwd=wd)
+    subprocess.run(["git", "init", "-q"], cwd=wd, creationflags=NOWIN)
+    subprocess.run(["git", "add", "-A"], cwd=wd, creationflags=NOWIN)
+    subprocess.run(["git", "-c", "user.name=seed", "-c", "user.email=seed@local", "commit", "-qm", "seed"], cwd=wd, creationflags=NOWIN)
     return wd
 
 
@@ -219,7 +253,7 @@ def run_check(job: Job, wd: Path) -> tuple[bool, str]:
     cmd = job.spec.get("check", "uv run --with pytest pytest -q")
     try:
         p = subprocess.run(cmd, cwd=wd, shell=True, capture_output=True, text=True, timeout=900,
-                           encoding="utf-8", errors="replace")
+                           encoding="utf-8", errors="replace", creationflags=NOWIN)
         out = (p.stdout + p.stderr)[-3000:]
         return p.returncode == 0, out
     except subprocess.TimeoutExpired:
@@ -241,15 +275,27 @@ def run_attempt(job: Job, model: str, attempt: int) -> bool:
     t0 = time.time()
     cmd = [OPENCODE, "run", "--standalone", "--auto", "--format", "json", "-m", model,
            "--title", f"modeltuner {job.name} ({model})", prompt]
-    with (wd / "opencode.jsonl").open("w", encoding="utf-8") as out, (wd / "opencode.err").open("w", encoding="utf-8") as err:
-        try:
-            p = subprocess.run(cmd, cwd=wd, stdout=out, stderr=err, timeout=timeout)
-            rc = p.returncode
-        except subprocess.TimeoutExpired:
-            rc = "timeout"
+    for launch_try in range(3):
+        with _launch_lock:
+            wait = LAUNCH_GAP_S - (time.time() - _last_launch[0])
+            if wait > 0:
+                time.sleep(wait)
+            _last_launch[0] = time.time()
+        t_launch = time.time()
+        with (wd / "opencode.jsonl").open("w", encoding="utf-8") as out, (wd / "opencode.err").open("w", encoding="utf-8") as err:
+            try:
+                p = subprocess.run(cmd, cwd=wd, stdout=out, stderr=err, timeout=timeout, creationflags=NOWIN)
+                rc = p.returncode
+            except subprocess.TimeoutExpired:
+                rc = "timeout"
+        errtext = (wd / "opencode.err").read_text(encoding="utf-8", errors="replace")
+        if rc != 0 and time.time() - t_launch < 60 and "before reporting readiness" in errtext:
+            log(f"[{job.name}] OpenCode failed to start (launch collision); retrying the same model")
+            continue
+        break
     elapsed = time.time() - t0
     ok, check_out = run_check(job, wd)
-    changed = subprocess.run(["git", "status", "--porcelain"], cwd=wd, capture_output=True, text=True).stdout
+    changed = subprocess.run(["git", "status", "--porcelain"], cwd=wd, capture_output=True, text=True, creationflags=NOWIN).stdout
     tokens = _token_totals(wd / "opencode.jsonl")
     hist = job.result().get("attempts", [])
     hist.append({"model": model, "attempt": attempt, "rc": rc, "seconds": round(elapsed), "check_ok": ok,
@@ -269,7 +315,8 @@ def worker(job: Job) -> None:
             return
         try:
             if model.startswith(LOCAL_PREFIX):
-                while LLAMA_LOCK.exists() and not STOP.exists():
+                while (why := local_blocked()) and not STOP.exists():
+                    job.save_result(state="running", waiting=why)
                     time.sleep(POLL_S)
                 if job.spec.get("local_model"):
                     ensure_local_model(job.spec["local_model"], job.spec.get("local_settings"))
@@ -326,7 +373,7 @@ def run() -> None:
                 n_local = sum(1 for n in running
                               if n in by_name and any(m.startswith(LOCAL_PREFIX) for m in by_name[n].spec["models"]))
                 n_cloud = len(running) - n_local
-                if is_local and (n_local >= 1 or LLAMA_LOCK.exists()):
+                if is_local and (n_local >= 1 or local_blocked()):
                     continue
                 if not is_local and n_cloud >= MAX_CLOUD:
                     continue
