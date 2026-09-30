@@ -66,13 +66,13 @@
                                                    "extraArgs":  "--spec-type ngram-mod --spec-ngram-mod-n-match 8 --load-mode none --cache-ram 0 --reasoning-budget 4096"
                                                },
                    "Qwen3.5-9B-UD-Q6_K_XL-mtp.gguf":  {
-                                                          "contextSize":  131072,
+                                                          "contextSize":  139264,
                                                           "gpuLayers":  999,
                                                           "flashAttn":  true,
                                                           "parallel":  1,
                                                           "jinja":  true,
                                                           "batchSize":  1024,
-                                                          "ubatchSize":  256,
+                                                          "ubatchSize":  512,
                                                           "ropeFreqBase":  0,
                                                           "ropeFreqScale":  0,
                                                           "threads":  8,
