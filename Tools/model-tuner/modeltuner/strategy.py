@@ -635,11 +635,23 @@ class Tuner:
             return t.quality[suite]
         if not self.ensure_loaded(t):
             return None
-        try:
-            r = self.b.quality(suite, limit=limit)
-        except NotImplementedError as e:
-            self.emit("note", f"Quality suite {suite} skipped: {e}")
-            return None
+        for attempt in range(2):
+            key_before = self.b.power_key()
+            try:
+                r = self.b.quality(suite, limit=limit)
+            except NotImplementedError as e:
+                self.emit("note", f"Quality suite {suite} skipped: {e}")
+                return None
+            why = interruption(r, key_before, self.b.power_key())
+            if not why or attempt == 1:
+                if why:
+                    self.emit("warn", f"{suite} was interrupted again ({why}); keeping the second result")
+                break
+            # A stall (the laptop slept, the power source changed) makes timings meaningless and can cut a task
+            # short; the suite is cheap next to a wrong decision, so it runs once more.
+            self.emit("warn", f"{suite} was interrupted ({why}); running it again")
+            if not self.ensure_loaded(t):
+                return None
         t.quality[suite] = r
         tid = self._hist_trial(t)
         if tid is not None:
@@ -661,14 +673,15 @@ class Tuner:
             t = self.trial(cfg, "thinking")
             r = self._quality(t, "reasoning", None)
             if r is not None:
-                results.append((r.passed, -r.seconds, t, val))
+                results.append((r.passed, -r.tokens, t, val))
         if not results:
             return inc
         best_pass = max(r[0] for r in results)
-        # smallest/fastest setting that reaches the best pass count
+        # Among the settings with the best score, the one that spends the fewest tokens. Tokens, not seconds: they
+        # measure thinking length directly and a stall (sleep, a power change) cannot distort them.
         pick = max((r for r in results if r[0] == best_pass), key=lambda r: r[1])
-        self.emit("decision", f"{what.capitalize()}: {pick[3]} ({best_pass} passed, "
-                              f"{-pick[1]:.0f}s for the reasoning set; the fastest setting with the best score).")
+        self.emit("decision", f"{what.capitalize()}: {pick[3]} ({best_pass} passed using {-pick[1]:,} tokens for "
+                              f"the reasoning set; the leanest setting with the best score).")
         return pick[2]
 
     def phase_confirm(self, best: TrialRecord, base: TrialRecord) -> dict[str, float]:
@@ -757,3 +770,18 @@ class Tuner:
 
 class _Budget(Exception):
     pass
+
+
+def interruption(r: QualityResult, key_before: str, key_after: str) -> str | None:
+    """Why a quality run's timings can't be trusted, or None. A task far slower per token than the suite's median
+    means the machine stalled mid-task (Modern Standby froze a reasoning task for 17 minutes on 2026-09-30)."""
+    if key_before != key_after:
+        return f"power state changed from {key_before} to {key_after}"
+    rates = [d["tokens"] / d["seconds"] for d in r.details
+             if d.get("tokens") and d.get("seconds") and d["seconds"] > 0]
+    if len(rates) >= 3:
+        mid = sorted(rates)[len(rates) // 2]
+        slow = [x for x in rates if x < 0.25 * mid]
+        if slow:
+            return f"a task ran at {min(slow):.1f} tok/s against a typical {mid:.0f} tok/s (the machine stalled)"
+    return None
