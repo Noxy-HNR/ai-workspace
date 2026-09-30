@@ -45,11 +45,17 @@ _PATH = re.compile(r"[A-Za-z]:\\[^\s'\"]+")
 class Diagnosis:
     cause: str
     probability: float
+    confidence: float           # how concentrated the distribution is (TypeSafe's Choice confidence)
     kind: str
     probabilities: dict[str, float]
 
+    @property
+    def actionable(self) -> bool:
+        """Only a probable AND concentrated answer changes how the tuner reacts; otherwise it is just logged."""
+        return self.probability >= 0.6 and self.confidence >= 0.5
+
     def describe(self) -> str:
-        return f"Jev: {self.probability:.0%} {self.cause.replace('_', ' ')}"
+        return f"Jev: {self.probability:.0%} {self.cause.replace('_', ' ')} (confidence {self.confidence:.2f})"
 
 
 def available() -> bool:
@@ -91,12 +97,14 @@ def diagnose_failure(log_tail: str, facts: dict) -> Diagnosis | None:
     state = {"what_happened": "llama-server failed while loading or serving a model during automatic tuning",
              "facts": facts, "log_lines": filter_log(log_tail)}
     res = ask(state, {"cause": {
-        "instructions": "From the facts (GPU memory numbers, settings) and the llama-server log lines, what is the "
-                        "most likely cause of the failure?",
+        "instructions": "llama-server (llama.cpp) stopped while loading or serving a model. Using the GPU and RAM "
+                        "numbers and settings in `facts` and the error lines in `log_lines`, what most likely caused "
+                        "the failure?",
         "criteria": FAILURE_CAUSES}})
     ans = (res.get("answers") or {}).get("cause")
     if not ans or ans.get("choice") not in FAILURE_CAUSES:
         return None
     probs = {k: float(v) for k, v in (ans.get("probabilities") or {}).items()}
     cause = ans["choice"]
-    return Diagnosis(cause=cause, probability=probs.get(cause, 0.0), kind=CAUSE_TO_KIND[cause], probabilities=probs)
+    return Diagnosis(cause=cause, probability=probs.get(cause, 0.0), confidence=float(ans.get("confidence", 0.0)),
+                     kind=CAUSE_TO_KIND[cause], probabilities=probs)

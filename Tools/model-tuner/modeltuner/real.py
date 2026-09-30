@@ -99,7 +99,7 @@ class RealBackend:
         if d is None:
             return kind, msg
         self.log(f"{d.describe()} (treated as '{d.kind}')")
-        return (d.kind, f"{msg} [{d.describe()}]") if d.probability >= 0.6 else (kind, f"{msg} [{d.describe()}]")
+        return (d.kind, f"{msg} [{d.describe()}]") if d.actionable else (kind, f"{msg} [{d.describe()}]")
 
     # ---- Backend protocol ----
     def project(self, cfg: Config) -> Projection:

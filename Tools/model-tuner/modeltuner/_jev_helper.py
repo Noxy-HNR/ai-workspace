@@ -3,7 +3,7 @@ config loader, so the tuner never reads or handles the key). Reads one request a
 
     {"state": {...}, "questions": {"name": {"instructions": "...", "criteria": {"label": "description", ...}}}}
 
-and prints {"answers": {"name": {"choice": label, "probabilities": {label: p}}}} or {"error": "..."} on stdout.
+and prints {"answers": {"name": {"choice": label, "confidence": c, "probabilities": {label: p}}}} or {"error": "..."} on stdout.
 """
 
 from __future__ import annotations
@@ -25,21 +25,16 @@ async def _main() -> dict:
         return {"error": "no TypeSafe key configured in Switchboard"}
     questions = {name: Choice(instructions=q["instructions"], criteria=q["criteria"])
                  for name, q in req["questions"].items()}
-    client = AsyncTypeSafeClient(api_key=cfg.typesafe_api_key, model=cfg.decisions.jev.model,
-                                 timeout=float(req.get("timeout_s", 10)))
     try:
-        resp = await client.system_one(req["state"], questions)
+        # The documented form: the context manager closes the HTTP client however the call ends.
+        async with AsyncTypeSafeClient(api_key=cfg.typesafe_api_key, model=cfg.decisions.jev.model,
+                                       timeout=float(req.get("timeout_s", 10))) as client:
+            resp = await client.system_one(req["state"], questions)
     except Exception as e:  # noqa: BLE001 -- report the kind only; provider messages may echo input
         return {"error": f"Jev request failed ({type(e).__name__})"}
-    finally:
-        close = getattr(client, "aclose", None) or getattr(client, "close", None)
-        if close is not None:
-            res = close()
-            if asyncio.iscoroutine(res):
-                await res
-    return {"answers": {name: {"choice": a.choice, "probabilities": dict(a.probabilities)}
+    return {"answers": {name: {"choice": a.choice, "confidence": float(a.confidence),
+                               "probabilities": dict(a.probabilities)}
                         for name, a in resp.choices.items()}}
-
 
 if __name__ == "__main__":
     print(json.dumps(asyncio.run(_main())))
