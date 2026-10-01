@@ -14,7 +14,7 @@
                                                        "cacheTypeK":  "q8_0",
                                                        "cacheTypeV":  "q8_0",
                                                        "reasoningEffort":  "default",
-                                                       "extraArgs":  "--spec-type ngram-mod --spec-ngram-mod-n-match 8"
+                                                       "extraArgs":  "--spec-type ngram-mod --spec-ngram-mod-n-match 8 --load-mode none --cache-ram 0"
                                                    },
                    "Huihui-Qwen3.8-27B-abliterated-GSQ-RCO-IQ3_XXS-mtp.gguf":  {
                                                                                    "contextSize":  24576,
