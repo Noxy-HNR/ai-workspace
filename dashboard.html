@@ -6,21 +6,29 @@
     <title>AI Workspace Dashboard</title>
     <style>
         :root {
-            --bg-primary: #0d1318;
-            --bg-secondary: #121c23;
-            --bg-card: #17232b;
-            --bg-card-hover: #1d2c35;
-            --border: #2a3943;
-            --text-primary: #eef4f5;
-            --text-secondary: #a4b4bf;
-            --text-muted: #899da9;
-            --accent-blue: #88baff;
-            --accent-green: #67d5b5;
-            --accent-red: #f85149;
-            --accent-yellow: #d29922;
-            --accent-purple: #bc8cff;
-            --accent-orange: #f0883e;
-            --accent-cyan: #67d5b5;
+            /* Assistant design tokens (web/src/index.css). Dark only. Names are kept so every tab picks them up. */
+            --bg-primary: #1f1e1d;
+            --bg-secondary: #181716;
+            --bg-card: #2a2826;
+            --bg-card-hover: #302e2c;
+            --bg-field: #262423;
+            --border: #3a3835;
+            --border-strong: #4d4a46;
+            --text-primary: #ece9e4;
+            --text-secondary: #d8d3cc;
+            --text-muted: #a39e96;
+            --accent: #d97757;
+            --accent-hover: #e79377;
+            --on-accent: #1b1412;
+            --accent-blue: #d97757;
+            --accent-green: #7fb77e;
+            --accent-red: #e07070;
+            --accent-yellow: #d9a441;
+            --accent-purple: #a39e96;
+            --accent-orange: #d97757;
+            --accent-cyan: #d97757;
+            --font-sans: ui-sans-serif, system-ui, "Segoe UI Variable", "Segoe UI", sans-serif;
+            --font-mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
             --shadow: 0 2px 8px rgba(0,0,0,0.3);
             --shadow-lg: 0 4px 16px rgba(0,0,0,0.4);
         }
@@ -525,22 +533,105 @@
             .benchmark-results { flex-wrap:wrap; } .gpu-metrics { grid-template-columns:repeat(2,minmax(0,1fr)); }
         }
         @media(prefers-reduced-motion:reduce) { *,*::before,*::after { animation:none!important; transition:none!important; scroll-behavior:auto!important; } }
+        /* Overview (Services tab) and the Assistant palette for buttons, tabs and labels. Later rules win. */
+        body { font-family: var(--font-sans); }
+        .header h1 .header-sub { font-size: 12.5px; font-weight: 400; color: var(--text-muted); letter-spacing: 0; }
+        .eyebrow { color: var(--text-muted); font-size: 10.5px; font-weight: 600; letter-spacing: .09em; text-transform: uppercase; margin-bottom: 6px; }
+        .label-caps { margin: 0; font-size: 10.5px; font-weight: 600; letter-spacing: .09em; text-transform: uppercase; color: var(--text-muted); }
+        .label-caps .count { color: var(--text-secondary); margin-left: 4px; font-variant-numeric: tabular-nums; }
+        .tabs { background: var(--bg-secondary); border-radius: 12px; padding: 4px; }
+        .tab { font-size: 13px; font-weight: 500; padding: 8px 14px; border: 1px solid transparent; border-radius: 9px; }
+        .tab:hover { background: var(--bg-field); color: var(--text-primary); }
+        .tab.active { color: var(--text-primary); background: var(--bg-card-hover); border-color: var(--border-strong); box-shadow: none; }
+        .overview-head { margin-bottom: 20px; }
+        .overview-title { font-size: 20px; font-weight: 600; letter-spacing: -.01em; line-height: 1.35; color: var(--text-primary); margin-top: 4px; }
+        .overview-sub { font-size: 13px; color: var(--text-muted); margin-top: 4px; }
+
+        /* Needs you: only shown when a service is down with an error. */
+        .needs-you { background: var(--bg-card); border: 1px solid var(--border); border-radius: 14px; padding: 14px 18px; margin-bottom: 16px; }
+        .needs-you[hidden] { display: none; }
+        .needs-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; padding: 12px 0 0; margin-top: 10px; border-top: 1px solid var(--border); }
+        .needs-row:first-of-type { border-top: 0; }
+        .needs-text { flex: 1 1 260px; min-width: 0; }
+        .needs-name { font-size: 14px; font-weight: 600; color: var(--text-primary); }
+        .needs-detail { font-size: 13px; line-height: 1.5; color: var(--text-secondary); overflow-wrap: anywhere; }
+        .needs-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+        /* Resources row. */
+        .status-bar { gap: 12px; margin-bottom: 16px; }
+        .status-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 14px; padding: 16px 18px; box-shadow: none; }
+        .status-card .label { font-size: 10.5px; letter-spacing: .09em; color: var(--text-muted); }
+        .status-card .value { font-size: 22px; font-weight: 600; letter-spacing: 0; margin-top: 6px; color: var(--text-primary); }
+        .status-card .detail { font-size: 12.5px; color: var(--text-muted); margin-top: 2px; }
+
+        /* Services list and side panels. */
+        .overview-grid { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 16px; align-items: start; }
+        @media (max-width: 1000px) { .overview-grid { grid-template-columns: minmax(0, 1fr); } }
+        .overview-side { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+        .panel { background: var(--bg-card); border: 1px solid var(--border); border-radius: 14px; padding: 16px 18px; min-width: 0; }
+        .panel-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 12px; margin-bottom: 2px; }
+        .panel-meta { font-size: 12.5px; color: var(--text-muted); margin: 0; }
+        .services-list { list-style: none; margin: 0; padding: 0; }
+        .service-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 16px; align-items: start; padding: 14px 0; border: 0; border-top: 1px solid var(--border); border-radius: 0; background: transparent; box-shadow: none; }
+        .service-card:first-child { border-top: 0; }
+        .service-card:hover, .service-card.is-running, .service-card.is-stopped, .service-card.is-failed, .service-card.is-starting { border: 0; border-top: 1px solid var(--border); background: transparent; box-shadow: none; }
+        .service-card:first-child { border-top: 0; }
+        .service-main { min-width: 0; }
+        .service-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+        .service-name { font-size: 14.5px; font-weight: 600; color: var(--text-primary); letter-spacing: 0; }
+        .service-badge { display: inline-flex; align-items: center; height: 22px; padding: 0 9px; border-radius: 999px; border: 1px solid transparent; font-size: 11.5px; font-weight: 500; letter-spacing: 0; text-transform: none; white-space: nowrap; }
+        .badge-running { background: #7fb77e1f; color: var(--accent-green); border-color: #7fb77e59; }
+        .badge-stopped { background: #e070701f; color: var(--accent-red); border-color: #e0707059; }
+        .badge-starting { background: #d9a4411f; color: var(--accent-yellow); border-color: #d9a44159; }
+        .badge-idle { background: var(--bg-field); color: var(--text-muted); border-color: var(--border-strong); }
+        .service-addr { font-family: var(--font-mono); font-size: 12px; color: var(--text-muted); margin-top: 2px; overflow-wrap: anywhere; }
+        .service-desc { margin: 4px 0 0; font-size: 13px; line-height: 1.55; color: var(--text-secondary); }
+        .service-error { margin: 4px 0 0; font-size: 12.5px; line-height: 1.5; color: var(--accent-red); overflow-wrap: anywhere; }
+        .service-actions { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; margin: 0; }
+        .service-actions .btn { min-height: 30px; padding: 0 11px; font-size: 12.5px; border-radius: 10px; }
+
+        .active-name { margin-top: 8px; font-size: 14px; font-weight: 600; color: var(--text-primary); overflow-wrap: anywhere; }
+        .active-file { font-family: var(--font-mono); font-size: 12px; color: var(--text-muted); overflow-wrap: anywhere; }
+        .active-stats { display: grid; gap: 8px; margin: 14px 0; font-size: 13px; }
+        .active-stats > div { display: flex; justify-content: space-between; gap: 12px; }
+        .active-stats dt { color: var(--text-muted); }
+        .active-stats dd { margin: 0; color: var(--text-primary); text-align: right; font-variant-numeric: tabular-nums; }
+        .overview-side .gpu-card { background: transparent; border: 0; border-radius: 0; box-shadow: none; padding: 8px 0 0; }
+        .overview-side .gpu-card .gpu-name { color: var(--text-secondary); }
+        .gpu-bar-track { background: var(--bg-field); }
+
+        /* Buttons, on the Assistant palette: primary is ink, danger and warning are text-coloured, the rest are fields. */
+        .btn, .btn:hover { border-radius: 10px; }
+        .btn-primary, .btn-primary:disabled { background: var(--text-primary); border-color: var(--text-primary); color: var(--bg-primary); }
+        .btn-primary:hover:not(:disabled) { background: #ffffff; border-color: #ffffff; }
+        .btn-danger, .btn-danger:disabled { background: transparent; border-color: #e0707059; color: var(--accent-red); }
+        .btn-danger:hover:not(:disabled) { background: #e070701f; border-color: var(--accent-red); }
+        .btn-warning { background: transparent; border-color: #d9a44159; color: var(--accent-yellow); }
+        .btn-warning:hover { background: #d9a4411f; color: var(--accent-yellow); }
+        .btn-info, .btn-info:hover { background: var(--bg-field); border-color: var(--border); color: var(--text-secondary); }
+        .btn-info:hover { background: var(--bg-card-hover); border-color: var(--border-strong); }
+        .btn-ghost { background: transparent; border-color: transparent; color: var(--text-muted); }
+        .btn-ghost:hover:not(:disabled) { background: var(--bg-field); border-color: transparent; color: var(--text-primary); }
+        .btn-warning, .btn-info { font-weight: 500; }
+
+        /* Feedback strip and remaining tabs: keep the old classes, but on the warm surfaces. */
+        .feedback-area { background: var(--bg-card); border-radius: 14px; }
+        .feedback-title { color: var(--text-muted); }
+        .log-viewer, .script-output { background: var(--bg-field); }
+        .chat-message.user { background: #d9775714; border-color: var(--accent); }
+        .chat-message.assistant { background: #a39e9614; border-color: var(--text-muted); }
+        .chat-messages:empty::before { color: var(--text-muted); }
     </style>
 </head>
 <body>
     <div class="header">
-        <h1><span class="brand-mark" aria-hidden="true">AI</span> Workspace</h1>
+        <h1>Workspace <span class="header-sub">On this machine</span></h1>
         <div class="header-actions">
             <button class="btn btn-sm" onclick="refreshAll()">Refresh</button>
         </div>
     </div>
-    
+
     <div class="dashboard">
-        <section class="workspace-intro" aria-label="Workspace overview">
-            <div><div class="eyebrow">Local intelligence</div><h2>Your workspace, at a glance.</h2>
-            <p>Manage your models, monitor performance, and keep your tools running smoothly.</p></div>
-            <span class="local-label">On your machine</span>
-        </section>
         <!-- Tabs -->
         <nav class="tabs" aria-label="Workspace sections">
             <button type="button" class="tab active" data-tab="services" aria-pressed="true" aria-controls="tab-services" onclick="switchTab('services')">Services</button>
@@ -555,59 +646,78 @@
         
         <!-- Feedback Area -->
         <details class="feedback-area" id="feedbackArea">
-            <summary class="feedback-title">Workspace activity</summary>
+            <summary class="feedback-title">Recent activity</summary>
             <div id="feedbackLines">
                 <div class="feedback-line info">Dashboard ready. Click Refresh or a service button to get started.</div>
             </div>
         </details>
         
-        <!-- Services Tab -->
+        <!-- Services Tab: overview -->
         <div class="tab-content active" id="tab-services">
-            <div class="section">
-                <div class="section-title">Service Status</div>
-                <div class="services-grid" id="servicesGrid">
-                    <div class="service-card">
-                        <div class="service-header">
-                            <span class="service-name">Loading...</span>
-                        </div>
-                    </div>
-                </div>
+            <div class="overview-head">
+                <div class="eyebrow">Overview</div>
+                <h2 class="overview-title">Services and resources</h2>
+                <p class="overview-sub" id="overviewSub">Checking services...</p>
             </div>
-            
-            <div class="section">
-                <div class="section-title">System Resources</div>
-                <div class="status-bar" id="systemBar">
-                    <div class="status-card">
-                        <div class="label">CPU</div>
-                        <div class="value status-blue" id="cpuValue">--</div>
-                        <div class="detail" id="cpuDetail">Loading...</div>
-                    </div>
-                    <div class="status-card">
-                        <div class="label">Memory</div>
-                        <div class="value status-blue" id="ramValue">--</div>
-                        <div class="detail" id="ramDetail">Loading...</div>
-                    </div>
-                    <div class="status-card">
-                        <div class="label">Disk (C:)</div>
-                        <div class="value status-green" id="diskValue">--</div>
-                        <div class="detail" id="diskDetail">Loading...</div>
-                    </div>
-                    <div class="status-card">
-                        <div class="label">Active Model GPU Layers</div>
-                        <div class="value status-green" id="gpuLayers">--</div>
-                        <div class="detail" id="gpuLayersDetail">Loading...</div>
-                    </div>
+
+            <section class="needs-you" id="needsYou" aria-labelledby="needsYouTitle" hidden>
+                <h3 class="label-caps" id="needsYouTitle">Needs you <span class="count" id="needsYouCount">0</span></h3>
+                <div id="needsYouList"></div>
+            </section>
+
+            <div class="status-bar" id="systemBar" aria-label="System resources">
+                <div class="status-card">
+                    <div class="label">CPU</div>
+                    <div class="value status-blue" id="cpuValue">--</div>
+                    <div class="detail" id="cpuDetail">Loading...</div>
+                </div>
+                <div class="status-card">
+                    <div class="label">Memory</div>
+                    <div class="value status-blue" id="ramValue">--</div>
+                    <div class="detail" id="ramDetail">Loading...</div>
+                </div>
+                <div class="status-card">
+                    <div class="label">Disk (C:)</div>
+                    <div class="value status-green" id="diskValue">--</div>
+                    <div class="detail" id="diskDetail">Loading...</div>
+                </div>
+                <div class="status-card">
+                    <div class="label">Active Model GPU Layers</div>
+                    <div class="value status-green" id="gpuLayers">--</div>
+                    <div class="detail" id="gpuLayersDetail">Loading...</div>
                 </div>
             </div>
 
-            <div class="section">
-                <div class="section-title">GPU</div>
-                <div id="gpuCard" class="gpu-card">
-                    <div class="gpu-unavailable">Loading...</div>
+            <div class="overview-grid">
+                <section class="panel" aria-labelledby="servicesTitle">
+                    <div class="panel-head">
+                        <h3 class="label-caps" id="servicesTitle">Services</h3>
+                        <span class="panel-meta" id="servicesMeta"></span>
+                    </div>
+                    <ul class="services-list" id="servicesGrid">
+                        <li class="service-card">
+                            <div class="service-main"><span class="service-name">Loading...</span></div>
+                        </li>
+                    </ul>
+                </section>
+
+                <div class="overview-side">
+                    <section class="panel" aria-labelledby="activeModelTitle">
+                        <h3 class="label-caps" id="activeModelTitle">Active model</h3>
+                        <div id="activeModel"><p class="panel-meta">Loading...</p></div>
+                    </section>
+
+                    <section class="panel" aria-labelledby="gpuTitle">
+                        <h3 class="label-caps" id="gpuTitle">GPU</h3>
+                        <div id="gpuCard" class="gpu-card">
+                            <div class="gpu-unavailable">Loading...</div>
+                        </div>
+                    </section>
                 </div>
             </div>
         </div>
-        
+
+</content>
         <!-- Models Tab -->
         <div class="tab-content" id="tab-models">
             <div class="section">
@@ -781,7 +891,6 @@
         });
 
         function switchTab(tabName) {
-            document.querySelector('.workspace-intro').hidden = tabName !== 'services';
             document.querySelectorAll('.tab').forEach(t => { t.classList.remove('active'); t.setAttribute('aria-pressed', String(t.dataset.tab === tabName)); });
             document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
             document.querySelector(`[data-tab="${tabName}"]`).classList.add('active');
@@ -836,6 +945,7 @@
                 renderServices(data.services);
                 renderSystemInfo(data.system);
                 renderGpuCard(data.gpu);
+                refreshActiveModel();
                 addFeedback('Status refreshed', 'success');
             } catch (e) {
                 addFeedback(`API error: ${e.message}. Is dashboard-server running?`, 'error');
@@ -864,74 +974,127 @@
             `;
         }
 
+        // Every service the overview lists. Order and copy are the same as the old card grid.
+        const SERVICE_LIST = [
+            { name: 'llama-server', port: 10000, url: 'http://127.0.0.1:10000', desc: 'LLM inference engine' },
+            { name: 'cptr', port: 8000, url: 'http://127.0.0.1:8000', desc: 'Agent controller / MCP server' },
+            { name: 'switchboard', port: 8002, url: 'http://127.0.0.1:8002', desc: 'Intelligent model routing and agent supervision (starts independently of llama-server)' },
+            { name: 'assistant', title: 'Personal Assistant', port: null, url: null, desc: 'Chat, tasks and settings dashboard with the agent (Start launches it exactly like the desktop shortcut)' },
+            { name: 'telegram-bot', title: 'Relay Station / Telegram Bot', port: 9095, url: 'http://127.0.0.1:9095', desc: 'Telegram conversations, reply queue, access controls, and bot settings' },
+            { name: 'oura-mcp', port: null, url: null, desc: 'Personal health data MCP server' },
+        ];
+        const SERVICE_LABEL = { starting: 'Starting', running: 'Running', failed: 'Not responding', stopped: 'Stopped' };
+        const SERVICE_BADGE = { starting: 'badge-starting', running: 'badge-running', failed: 'badge-stopped', stopped: 'badge-idle' };
+
         function renderServices(services) {
-            const grid = document.getElementById('servicesGrid');
-            const serviceList = [
-                { name: 'llama-server', port: 10000, url: 'http://127.0.0.1:10000', desc: 'LLM inference engine', icon: '🧠' },
-                { name: 'cptr', port: 8000, url: 'http://127.0.0.1:8000', desc: 'Agent controller / MCP server', icon: '🕹️' },
-                { name: 'switchboard', port: 8002, url: 'http://127.0.0.1:8002', desc: 'Intelligent model routing and agent supervision (starts independently of llama-server)', icon: '🔀' },
-                { name: 'telegram-bot', title: 'Relay Station / Telegram Bot', port: 9095, url: 'http://127.0.0.1:9095', desc: 'Telegram conversations, reply queue, access controls, and bot settings', icon: '✈️' },
-                { name: 'oura-mcp', port: null, url: null, desc: 'Personal health data MCP server', icon: '💍' },
-            ];
-
-            let html = '';
-            for (const svc of serviceList) {
+            const rows = [];
+            const needs = [];
+            let running = 0;
+            for (const svc of SERVICE_LIST) {
                 const svcData = services[svc.name] || { running: false };
-                const status = svcData.running;
-                const pendingReady = svc.name === 'telegram-bot' && status && svcData.ready === false;
-                const badgeClass = pendingReady ? 'badge-starting' : (status ? 'badge-running' : 'badge-stopped');
-                const statusText = pendingReady ? 'Starting' : (status ? 'Running' : 'Stopped');
-                const port = svc.port || svcData.port || '--';
+                const up = !!svcData.running;
+                const starting = svc.name === 'telegram-bot' && up && svcData.ready === false;
+                if (up) running += 1;
+                // A process still holding its port but not answering is "Not responding". A service that is
+                // simply off has no pid, so it is "Stopped" and stays out of Needs you.
+                const state = starting ? 'starting' : up ? 'running' : svcData.pid ? 'failed' : 'stopped';
+                const port = svc.port || svcData.port || null;
                 const url = svc.url || (svcData.port ? `http://127.0.0.1:${svcData.port}` : null);
-
-                html += `
-                    <div class="service-card ${status ? 'is-running' : 'is-stopped'}" data-service="${svc.name}">
-                        <div class="service-header">
-                            <span class="service-name">${svc.title || svc.name}</span>
-                            <span class="service-badge ${badgeClass}">${statusText}</span>
-                        </div>
-                        <div style="font-size:12px;color:var(--text-secondary);margin:-8px 0 8px;">${svc.desc}</div>
-                        <div class="service-details">
-                            <div class="service-detail-row">
-                                <span>Port</span>
-                                <span>${port}</span>
+                const address = [port ? `127.0.0.1:${port}` : null, svcData.pid ? `PID ${svcData.pid}` : null]
+                    .filter(Boolean).join(' · ') || 'Not listening';
+                let note = svc.desc;
+                if (svc.name === 'telegram-bot' && up) note += svcData.ready ? '. Console ready.' : '. Waiting for startup.';
+                if (svc.name === 'oura-mcp' && up) note += svcData.authorized ? '. Oura authorized.' : '. Oura not authorized yet.';
+                if (state === 'failed') needs.push({ svc, error: svcData.error });
+                rows.push(`
+                    <li class="service-card is-${state}" data-service="${svc.name}">
+                        <div class="service-main">
+                            <div class="service-line">
+                                <span class="service-name">${escapeHtml(svc.title || svc.name)}</span>
+                                <span class="service-badge ${SERVICE_BADGE[state]}">${SERVICE_LABEL[state]}</span>
                             </div>
-                            <div class="service-detail-row">
-                                <span>URL</span>
-                                <span>${url ? `<a href="${url}" target="_blank" style="color:var(--accent-blue)">${url}</a>` : '--'}</span>
-                            </div>
-                            <div class="service-detail-row">
-                                <span>PID</span>
-                                <span>${svcData.pid || '--'}</span>
-                            </div>
-                            ${svc.name === 'telegram-bot' ? `
-                            <div class="service-detail-row">
-                                <span>Console</span>
-                                <span>${svcData.ready ? 'Ready' : (status ? 'Waiting for startup' : 'Offline')}</span>
-                            </div>` : ''}
-                            ${svc.name === 'oura-mcp' ? `
-                            <div class="service-detail-row">
-                                <span>Oura authorized</span>
-                                <span style="color:${svcData.authorized ? 'var(--accent-green)' : 'var(--accent-yellow)'}">${svcData.authorized ? 'Yes' : 'No'}</span>
-                            </div>` : ''}
-                            ${svcData.error ? `<div class="service-detail-row"><span style="color:var(--accent-red)">Error</span><span style="font-size:11px;color:var(--accent-red)">${escapeHtml(svcData.error)}</span></div>` : ''}
+                            <div class="service-addr">${escapeHtml(address)}</div>
+                            <p class="service-desc">${escapeHtml(note)}</p>
+                            ${state === 'failed' && svcData.error ? `<p class="service-error">${escapeHtml(svcData.error)}</p>` : ''}
                         </div>
-                        <div class="service-actions">
-                            ${status
-                                ? `<button class="btn btn-sm btn-danger" onclick="controlService('${svc.name}','stop')">■ Stop</button>`
-                                : `<button class="btn btn-sm btn-primary" onclick="controlService('${svc.name}','start')">▶ Start</button>`
-                            }
-                            <button class="btn btn-sm btn-warning" onclick="controlService('${svc.name}','restart')">↻ Restart</button>
-                            ${svc.name === 'telegram-bot' ? `<a class="btn btn-sm btn-info" href="${url}" target="_blank" rel="noopener noreferrer">Open console ↗</a>` : ''}
-                            ${svc.name === 'llama-server' ? `<button class="btn btn-sm btn-info" onclick="listModels()">Models</button>` : ''}
-                            ${svc.name === 'oura-mcp' && url ? `<button class="btn btn-sm" onclick="window.open('${url}/oauth/start','_blank')">Authorize</button>` : ''}
-                        </div>
-                    </div>
-                `;
+                        <div class="service-actions">${serviceActions(svc, up, url)}</div>
+                    </li>`);
             }
-            grid.innerHTML = html;
+            document.getElementById('servicesGrid').innerHTML = rows.join('');
+
+            const needsBox = document.getElementById('needsYou');
+            needsBox.hidden = needs.length === 0;
+            document.getElementById('needsYouCount').textContent = String(needs.length);
+            document.getElementById('needsYouList').innerHTML = needs.map(({ svc, error }) => `
+                <div class="needs-row">
+                    <div class="needs-text">
+                        <div class="needs-name">${escapeHtml(svc.title || svc.name)}</div>
+                        <div class="needs-detail">${escapeHtml(error || 'Not responding.')}</div>
+                    </div>
+                    <div class="needs-actions">
+                        <button type="button" class="btn btn-sm" onclick="controlService('${svc.name}','restart')">Try again</button>
+                        <button type="button" class="btn btn-sm btn-ghost" onclick="switchTab('logs')">View logs</button>
+                    </div>
+                </div>`).join('');
+
+            const checked = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            const attention = needs.length
+                ? `${needs.length} ${needs.length === 1 ? 'needs' : 'need'} you.`
+                : 'Nothing needs you.';
+            document.getElementById('overviewSub').textContent =
+                `${SERVICE_LIST.length} services on this machine. ${attention} Checked ${checked}.`;
+            document.getElementById('servicesMeta').textContent = `${running} of ${SERVICE_LIST.length} running`;
         }
-        
+
+        function serviceActions(svc, up, url) {
+            const name = svc.name;
+            const buttons = [
+                up
+                    ? `<button type="button" class="btn btn-sm btn-danger" onclick="controlService('${name}','stop')">Stop</button>`
+                    : `<button type="button" class="btn btn-sm btn-primary" onclick="controlService('${name}','start')">Start</button>`,
+                `<button type="button" class="btn btn-sm btn-ghost" onclick="controlService('${name}','restart')">Restart</button>`,
+            ];
+            if (name === 'assistant' && up && url) buttons.push(`<a class="btn btn-sm btn-info" href="${url}" target="_blank" rel="noopener noreferrer">Open</a>`);
+            if (name === 'telegram-bot' && url) buttons.push(`<a class="btn btn-sm btn-info" href="${url}" target="_blank" rel="noopener noreferrer">Open console</a>`);
+            if (name === 'llama-server') buttons.push(`<button type="button" class="btn btn-sm btn-info" onclick="listModels()">Loaded models</button>`);
+            if (name === 'oura-mcp' && url) buttons.push(`<button type="button" class="btn btn-sm btn-info" onclick="window.open('${url}/oauth/start','_blank')">Authorize</button>`);
+            return buttons.join('');
+        }
+
+        // The active model comes from the same /api/models the Models tab uses, so the overview and the tab agree.
+        async function refreshActiveModel() {
+            try {
+                const data = await (await fetch(`${DASHBOARD_API}/api/models`)).json();
+                modelsCache = data.models || [];
+                updateActiveModelStat();
+                renderActiveModel();
+            } catch (e) {
+                document.getElementById('activeModel').innerHTML =
+                    `<p class="panel-meta">Could not read models: ${escapeHtml(e.message)}</p>`;
+            }
+        }
+
+        function renderActiveModel() {
+            const box = document.getElementById('activeModel');
+            const active = modelsCache.find(m => m.isActive);
+            if (!active) {
+                box.innerHTML = `<p class="panel-meta">No model is active.</p>
+                    <button type="button" class="btn btn-sm btn-info" onclick="switchTab('models')">Open models</button>`;
+                return;
+            }
+            const settings = active.settings || {};
+            const name = (active.filename || '').replace(/\.gguf$/i, '');
+            box.innerHTML = `
+                <div class="active-name">${escapeHtml(name)}</div>
+                <div class="active-file">${escapeHtml(active.filename || '')}</div>
+                <dl class="active-stats">
+                    <div><dt>Context</dt><dd>${settings.contextSize ? Number(settings.contextSize).toLocaleString() + ' tokens' : '--'}</dd></div>
+                    <div><dt>GPU layers</dt><dd>${settings.gpuLayers ?? '--'}</dd></div>
+                    <div><dt>File size</dt><dd>${active.sizeGB ? active.sizeGB + ' GB' : '--'}</dd></div>
+                </dl>
+                <button type="button" class="btn btn-sm btn-info" onclick="switchTab('models')">Open models</button>`;
+        }
+
         function renderSystemInfo(sys) {
             if (!sys) return;
             document.getElementById('cpuValue').textContent = sys.cores ? `${sys.cores}C/${sys.threads}T` : '--';
