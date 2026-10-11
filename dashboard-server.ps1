@@ -15,6 +15,8 @@ $SwitchboardHost = 'http://127.0.0.1:8002'
 $SwitchboardRoot = Join-Path $Root 'Switchboard'
 $SwitchboardStart = Join-Path $SwitchboardRoot 'scripts\start.ps1'
 $SwitchboardStop = Join-Path $SwitchboardRoot 'scripts\stop.ps1'
+$AssistantRoot = Join-Path $Root 'Assistant'
+$AssistantPython = Join-Path $AssistantRoot '.venv\Scripts\python.exe'
 $TelegramRoot = Join-Path $Root 'TelegramBot'
 $TelegramStart = Join-Path $TelegramRoot 'start-telegram-bot.ps1'
 $TelegramStop = Join-Path $TelegramRoot 'stop-telegram-bot.ps1'
@@ -79,6 +81,16 @@ function Get-PortPid {
         if ($c) { return [int]$c.OwningProcess }
     } catch {}
     return $null
+}
+
+function Get-AssistantPort {
+    # The Assistant's service port lives in its own settings file (default 18911).
+    $port = 18911
+    $file = Join-Path $AssistantRoot 'runtime\settings.json'
+    if (Test-Path -LiteralPath $file) {
+        try { $value = [int](Get-Content -Raw -LiteralPath $file | ConvertFrom-Json).service_port; if ($value -gt 0) { $port = $value } } catch {}
+    }
+    return $port
 }
 
 function Get-OuraPort {
@@ -151,6 +163,8 @@ function Get-ServiceStatus {
     $llamaUp = Test-Http "$LlamaHost/v1/models"
     $cptrUp = Test-Http "$CptrHost/openapi.json"
     $switchboardUp = Test-Http "$SwitchboardHost/health"
+    $assistantPort = Get-AssistantPort
+    $assistantUp = Test-Http "http://127.0.0.1:$assistantPort/"
     $ouraPort = Get-OuraPort
     $ouraUrl = "http://127.0.0.1:$ouraPort"
     $ouraHealth = $null
@@ -199,6 +213,14 @@ function Get-ServiceStatus {
                 port = 8002
                 url = $SwitchboardHost
                 error = if (-not $switchboardUp -and $switchboardPid) { 'Port 8002 is listening, but Switchboard health is not responding' } elseif (-not $switchboardUp) { 'Switchboard is not responding' } else { '' }
+            }
+            'assistant' = @{
+                running = $assistantUp
+                pid = Get-PortPid $assistantPort
+                startTime = ''
+                port = $assistantPort
+                url = "http://127.0.0.1:$assistantPort"
+                error = if (-not $assistantUp -and (Test-PortOpen -Port $assistantPort)) { "Port $assistantPort is listening, but the Assistant is not responding" } else { '' }
             }
             'telegram-bot' = (Get-RelayServiceStatus -Port 9095)
             'oura-mcp' = @{
@@ -317,6 +339,22 @@ function Start-LlamaNative {
 function Start-ServiceByName {
     param([string]$Name)
     switch ($Name) {
+        'assistant' {
+            $port = Get-AssistantPort
+            if (Test-Http "http://127.0.0.1:$port/") { return @{ success=$true; message='Assistant is already running.' } }
+            if (-not (Test-Path -LiteralPath $AssistantPython)) {
+                return @{ success=$false; message='The Assistant Python environment is missing. Run C:\AI\Assistant\scripts\install.ps1 first.' }
+            }
+            # The Assistant's own launcher (the same one the desktop shortcut uses): it checks free memory, starts the
+            # service detached and refuses a port owned by another program. It can take a while, so it runs detached.
+            $outLog = Join-Path $ScriptsLogDir 'assistant-launcher.stdout.log'
+            $errLog = Join-Path $ScriptsLogDir 'assistant-launcher.stderr.log'
+            try {
+                $p = Start-Process -FilePath $AssistantPython -ArgumentList @('-m','assistant.cli','--root',$AssistantRoot,'start') `
+                    -WorkingDirectory $AssistantRoot -WindowStyle Hidden -RedirectStandardOutput $outLog -RedirectStandardError $errLog -PassThru
+                return @{ success=$true; message="Assistant starting (launcher PID $($p.Id)). If memory is tight it starts dashboard only; the Assistant's own page has Start the assistant." }
+            } catch { return @{ success=$false; message="Failed to start Assistant: $($_.Exception.Message)" } }
+        }
         'telegram-bot' {
             if (-not (Test-Path -LiteralPath $TelegramStart)) {
                 return @{success=$false;message='Relay Station launcher is missing.'}
@@ -396,6 +434,24 @@ function Start-ServiceByName {
 function Stop-ServiceByName {
     param([string]$Name)
     switch ($Name) {
+        'assistant' {
+            $port = Get-AssistantPort
+            if (-not (Test-PortOpen -Port $port)) { return @{ success=$true; message='Assistant is not running.' } }
+            if (-not (Test-Path -LiteralPath $AssistantPython)) {
+                return @{ success=$false; message='The Assistant Python environment is missing, so it cannot be stopped from here.' }
+            }
+            # `assistant stop` shuts down gracefully (up to 4 minutes while tasks settle) and only ever stops processes the
+            # Assistant itself owns. Run it detached and wait briefly so this request loop is never held for minutes.
+            $outLog = Join-Path $ScriptsLogDir 'assistant-stop.stdout.log'
+            $errLog = Join-Path $ScriptsLogDir 'assistant-stop.stderr.log'
+            try {
+                $p = Start-Process -FilePath $AssistantPython -ArgumentList @('-m','assistant.cli','--root',$AssistantRoot,'stop') `
+                    -WorkingDirectory $AssistantRoot -WindowStyle Hidden -RedirectStandardOutput $outLog -RedirectStandardError $errLog -PassThru
+                for ($i = 0; $i -lt 40 -and (Test-PortOpen -Port $port); $i++) { Start-Sleep -Milliseconds 500 }
+                if (Test-PortOpen -Port $port) { return @{ success=$true; message='Assistant is shutting down (waiting for running tasks to settle).' } }
+                return @{ success=$true; message='Assistant stopped.' }
+            } catch { return @{ success=$false; message="Failed to stop Assistant: $($_.Exception.Message)" } }
+        }
         'telegram-bot' {
             if (-not (Test-Path -LiteralPath $TelegramStop)) {
                 return @{success=$false;message='Relay Station stop script is missing.'}

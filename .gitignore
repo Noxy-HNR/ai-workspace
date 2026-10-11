@@ -79,3 +79,6 @@ lora/
 # Scratch space and research notes (not project source)
 Scratch/
 Knowledge/
+
+# Assistant is its own git repo (nested); never vendor it here
+Assistant/

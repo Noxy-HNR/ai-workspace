@@ -1,5 +1,6 @@
 ﻿import json
 import os
+import random
 import time
 import http.client
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -8,6 +9,7 @@ TARGET_HOST = "127.0.0.1"
 TARGET_PORT = 10000
 LISTEN_PORT = 10001
 LOG_DIR = r"C:\AI\logs\llama-requests"
+MAX_LOG_FILES = 200
 
 os.makedirs(LOG_DIR, exist_ok=True)
 
@@ -19,9 +21,18 @@ class Proxy(BaseHTTPRequestHandler):
         body = self.rfile.read(length)
 
         stamp = int(time.time() * 1000)
-        filename = os.path.join(LOG_DIR, f"{stamp}.json")
+        filename = os.path.join(LOG_DIR, f"{stamp}-{os.getpid()}-{random.getrandbits(32):08x}.json")
         with open(filename, "wb") as f:
             f.write(body)
+        try:
+            logged = sorted(
+                (p for p in os.listdir(LOG_DIR) if p.endswith(".json")),
+                key=lambda p: os.path.getmtime(os.path.join(LOG_DIR, p)),
+            )
+            for old in logged[:-MAX_LOG_FILES]:
+                os.remove(os.path.join(LOG_DIR, old))
+        except OSError:
+            pass
 
         print(f"\n>>> POST {self.path}  body={len(body)} bytes  file={filename}")
 
