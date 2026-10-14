@@ -2,7 +2,7 @@
   Real launcher lifecycle against a disposable stdlib HTTP fixture only.
   Run through Windows PowerShell 5.1; no bot DB, Telegram, models, or browser.
 #>
-param([string]$PythonPath = 'C:\Users\braxt\AppData\Local\Programs\Python\Python313\python.exe')
+param([string]$PythonPath = (Join-Path $env:LOCALAPPDATA 'Programs\Python\Python313\python.exe'))
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $fixtureBase = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())

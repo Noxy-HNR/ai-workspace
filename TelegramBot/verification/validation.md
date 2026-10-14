@@ -2,7 +2,7 @@
 
 ## Desktop and main-dashboard integration
 
-- Installed `C:\Users\braxt\OneDrive\Desktop\Relay Station - Telegram Bot.lnk`
+- Installed `%USERPROFILE%\OneDrive\Desktop\Relay Station - Telegram Bot.lnk`
   with a dedicated icon and hidden start/reuse-and-open launcher. Verified its
   target, arguments, working directory, icon, and existence through Windows COM.
 - The main dashboard now reports `telegram-bot` on port 9095 and provides Start,
