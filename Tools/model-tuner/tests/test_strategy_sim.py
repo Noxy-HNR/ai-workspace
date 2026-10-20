@@ -53,3 +53,26 @@ def test_never_exceeds_budget_and_backs_off_on_oom():
 def test_load_budget_is_respected():
     b, r, ev = _run(SimModel(), Config(ctx=32768), max_loads=4)
     assert r.loads <= 5
+
+
+def _dense_27b():
+    return SimModel(name="sim-27b.gguf", n_layer=62, weights_mib=16000, has_mtp=False, base_gen_tps=25)
+
+
+def test_long_context_split_moves_ffn_not_whole_layers():
+    # at long context, whole blocks on the CPU also run attention over their KV cache there; FFN-only offload wins
+    b, r, ev = _run(_dense_27b(), Config(ctx=65536, ngl=30, threads=16, spec="none"))
+    assert r.best.ngl == 999 and r.best.n_cpu_ffn
+    assert any(m.startswith("Placement: FFN weights") for k, m in ev if k == "decision")
+    assert r.best.threads in (8, 10, 12)        # FFN on the CPU still counts as offloaded for the threads phase
+
+
+def test_placement_is_skipped_on_the_gpu_and_for_moe():
+    b, r, ev = _run(SimModel(), Config(ctx=32768, spec="none"))
+    assert not any("Tensor placement" in m for k, m in ev)
+    m = _dense_27b()
+    b = SimBackend(m, SimGpu(), seed=3)
+    ev = []
+    Tuner(b, _profile(m, n_expert=64), Config(ctx=65536, ngl=30, spec="none"), TuneOptions(),
+          emit=lambda k, msg, **d: ev.append((k, msg))).run(topo=(8, 20))
+    assert not any("Tensor placement" in msg for k, msg in ev)

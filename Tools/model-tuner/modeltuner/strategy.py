@@ -503,6 +503,40 @@ class Tuner:
         self.ref = ft.medians()
         return ft
 
+    def phase_placement(self, inc: TrialRecord) -> TrialRecord:
+        """Dense model split across GPU and CPU: try per-tensor placement against the layer split.
+
+        A layer split leaves whole blocks on the CPU, so their attention and KV cache run there too, and that cost
+        grows with context. Keeping every block's attention and KV cache on the GPU and moving only FFN weights to the
+        CPU (`-ot`, the `n_cpu_ffn` knob) puts about the same number of weight bytes in system RAM, but the work that
+        scales with context stays on the GPU. Which wins depends on the model and the context, so it is measured.
+        """
+        if self.p.is_moe or inc.cfg.ngl >= 999 or inc.cfg.ngl >= self.p.n_layer or inc.cfg.n_cpu_ffn:
+            return inc
+        self.emit("phase", "Tensor placement (FFN weights on the CPU, attention and KV cache on the GPU)")
+        lo, hi = 1, self.p.n_layer
+        probe = inc.cfg.with_(ngl=999, n_cpu_moe=None)
+        if not self.fits(probe.with_(n_cpu_ffn=hi)):
+            self.emit("decision", "Placement: even with every FFN on the CPU, attention and the KV cache would not "
+                                  "fit on the GPU at this context; kept the layer split.")
+            return inc
+        while lo < hi:                      # fewest FFN blocks on the CPU that still fit
+            mid = (lo + hi) // 2
+            if self.fits(probe.with_(n_cpu_ffn=mid)):
+                hi = mid
+            else:
+                lo = mid + 1
+        cand = self.trial(probe.with_(n_cpu_ffn=lo), "placement")
+        workloads = [w for w in self.ref]
+        v = self.challenge(inc, cand, workloads, f"{inc.cfg.ngl} layers on GPU -> FFN of {lo} layers on CPU")
+        if v is stats.Verdict.BETTER:
+            self.emit("decision", f"Placement: FFN weights of {lo} of {self.p.n_layer} layers on the CPU, attention "
+                                  f"and KV cache all on the GPU, beat {inc.cfg.ngl} whole layers on the GPU.")
+            return cand
+        self.emit("decision", f"Placement: kept {inc.cfg.ngl} whole layers on the GPU (FFN-only offload of {lo} "
+                              f"layers was not clearly better).")
+        return inc
+
     def phase_spec(self, inc: TrialRecord) -> TrialRecord:
         self.emit("phase", "Speculative decoding")
         options = ["none", "ngram-mod"] + (["draft-mtp", "draft-mtp,ngram-mod"] if self.p.has_mtp else [])
@@ -621,7 +655,7 @@ class Tuner:
 
     def phase_threads(self, inc: TrialRecord, topo: tuple[int, int] | None) -> TrialRecord:
         offloaded = inc.cfg.ngl < 999 and inc.cfg.ngl < self.p.n_layer
-        if not offloaded and not inc.cfg.n_cpu_moe:
+        if not offloaded and not inc.cfg.n_cpu_moe and not inc.cfg.n_cpu_ffn:
             self.emit("decision", f"Threads: skipped. Every layer runs on the GPU, where CPU threads barely matter; "
                                   f"kept {inc.cfg.threads}.")
             return inc
@@ -813,6 +847,7 @@ class Tuner:
                                               f"searching from it.")
                         inc = pt
             best = inc
+            best = inc = self.phase_placement(inc)
             best = inc = self.phase_spec(inc)
             best = inc = self.phase_spec_params(inc)
             best = inc = self.phase_batch(inc)
