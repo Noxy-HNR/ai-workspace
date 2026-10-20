@@ -76,6 +76,7 @@ class Config:                       # knobs.py
     reasoning_effort: str           # "default" | low | medium | high | xhigh
     threads_batch: int | None       # -tb (None = same as threads)
     n_cpu_moe: int | None           # --n-cpu-moe (MoE only)
+    n_cpu_ffn: int | None           # -ot: FFN weights of blocks 0..N-1 on the CPU, everything else on the GPU (dense only)
     passthrough: tuple[str, ...]    # other extraArgs kept verbatim (e.g. --load-mode none --cache-ram 0 are enforced)
 
 @dataclass
@@ -116,10 +117,14 @@ class Sample:                       # bench.py
    architecture and binary. A failed load (out of memory, crash) means "does not fit": back off by the calibrated
    error and bisect between the last good and first bad values. Never retry the same failing config.
 5. **Tune speed, in order of expected impact, skipping what cannot matter.**
+   - Placement (dense models split across GPU and CPU only): every layer on the GPU with the FFN weights of the
+     fewest blocks that fit moved to the CPU (`-ot`), challenged against the layer split. Both leave about the same
+     weight bytes in system RAM, but the per-tensor split keeps attention and the whole KV cache on the GPU, which
+     matters more as context grows. A rule written by hand in extraArgs is kept verbatim and never reinterpreted.
    - Speculative decoding: candidates depend on the model (draft-mtp only with an MTP head). Then its parameters by
      direction search (draft-n-max, n-gram match length).
    - Batch and ubatch: prompt speed versus compute-buffer VRAM. Never shrink the context target to win prompt speed.
-   - Threads (and threads-batch, n-cpu-moe): only when layers or experts run on the CPU. With everything on the GPU,
+   - Threads (and threads-batch, n-cpu-moe): only when layers, FFN weights or experts run on the CPU. With everything on the GPU,
      threads barely matter, so the tuner keeps the current value and says why.
 6. **Search rules.**
    - Direction search on numeric knobs: step one way; keep going while it improves; once a direction is worse, never

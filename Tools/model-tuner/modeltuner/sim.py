@@ -102,7 +102,19 @@ def _interp(anchors: tuple[tuple[int, float], ...], value: int) -> float:
     return anchors[-1][1]
 
 
+# Share of a dense block's weight bytes in its FFN (Gemma 3 27B: ~84%). `n_cpu_ffn` moves only that share.
+_FFN_SHARE = 0.8
+
+
+def _ffn_cpu_frac(cfg: Config, n_layer: int) -> float:
+    """Share of all weight bytes that `n_cpu_ffn` keeps on the CPU."""
+    if not cfg.n_cpu_ffn:
+        return 0.0
+    return _FFN_SHARE * min(cfg.n_cpu_ffn, n_layer) / n_layer
+
+
 def _gpu_frac(cfg: Config, n_layer: int) -> float:
+    """Share of whole blocks (weights, KV cache, compute) on the GPU."""
     if cfg.ngl >= 999:
         return 1.0
     return max(0.0, min(1.0, cfg.ngl / n_layer))
@@ -171,7 +183,7 @@ class SimBackend:
 
     def _projection_for(self, cfg: Config) -> Projection:
         frac = _gpu_frac(cfg, self.model.n_layer)
-        device_model = round(self.model.weights_mib * frac)
+        device_model = round(self.model.weights_mib * (frac - _ffn_cpu_frac(cfg, self.model.n_layer)))
         host_model = self.model.weights_mib - device_model
 
         kv_full = self.model.kv_mib_per_1k_ctx_f16 * (cfg.ctx / 1024)
@@ -242,9 +254,12 @@ class SimBackend:
 
     def _decode_tps(self, cfg: Config, workload: str) -> tuple[float, float]:
         """Base decode speed and speculation multiplier (before noise)."""
-        frac = _gpu_frac(cfg, self.model.n_layer)
+        layers = _gpu_frac(cfg, self.model.n_layer)
+        frac = layers - _ffn_cpu_frac(cfg, self.model.n_layer)    # weight bytes read from VRAM
         base = self.model.base_gen_tps
         harmonic = 1.0 / (frac / base + (1.0 - frac) / (base * 0.12))
+        # Blocks left whole on the CPU also run attention over their KV cache there, which grows with context.
+        harmonic /= 1.0 + 0.15 * (1.0 - layers) * cfg.ctx / 32768
         if frac >= 0.999:
             # On-GPU runs barely notice threads: <1% across any sane range.
             thread = 1.0 - 0.0005 * abs(cfg.threads - 8)

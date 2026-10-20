@@ -32,6 +32,10 @@ _VALUE_FLAGS: dict[str, tuple[str, type]] = {
     "-ncmoe": ("n_cpu_moe", int),
     "--n-cpu-moe": ("n_cpu_moe", int),
 }
+# The one -ot rule the tuner writes itself (`n_cpu_ffn`): the FFN weights of blocks 0..N-1 stay in system RAM while
+# attention, the KV cache and every other block run on the GPU. Any other -ot rule is kept verbatim in passthrough.
+_FFN_OT = re.compile(r"^blk\\\.\(([0-9|]+)\)\\\.ffn_\(up\|gate\|down\)\\\.weight=CPU$")
+_OT_FLAGS = ("-ot", "--override-tensor")
 # Flags the tuner owns through first-class settings; they must not also appear in extraArgs.
 _OWNED_ELSEWHERE = {
     "-c", "--ctx-size", "-ngl", "--n-gpu-layers", "--gpu-layers", "-t", "--threads", "-b", "--batch-size",
@@ -59,6 +63,7 @@ class Config:
     reasoning_effort: str = "default"
     threads_batch: int | None = None
     n_cpu_moe: int | None = None
+    n_cpu_ffn: int | None = None        # dense models: FFN weights of the first N blocks on the CPU (see ffn_override)
     parallel: int = 1
     jinja: bool = True
     passthrough: tuple[str, ...] = field(default_factory=tuple)
@@ -78,12 +83,16 @@ class Config:
         """Stable identity used to deduplicate trials and look results up in history."""
         d = asdict(self)
         d["passthrough"] = " ".join(self.passthrough)
+        if d["n_cpu_ffn"] is None:
+            del d["n_cpu_ffn"]      # added later; leaving it out keeps keys of older history rows matching
         return "|".join(f"{k}={d[k]}" for k in sorted(d))
 
     def describe(self) -> str:
         """Short human summary, e.g. 'ctx 131072, all layers on GPU, q8_0 cache, MTP+ngram (n_max 2)'."""
         parts = [f"ctx {self.ctx}"]
         parts.append("all layers on GPU" if self.ngl >= 999 else f"{self.ngl} layers on GPU")
+        if self.n_cpu_ffn:
+            parts.append(f"FFN of {self.n_cpu_ffn} layers on CPU")
         parts.append(f"{self.cache_k} cache" if self.cache_k == self.cache_v else f"K {self.cache_k}/V {self.cache_v}")
         if self.spec != SPEC_NONE:
             s = self.spec.replace("draft-mtp", "MTP").replace("ngram-mod", "ngram").replace(",", "+")
@@ -104,6 +113,21 @@ class Config:
         if self.n_cpu_moe:
             parts.append(f"{self.n_cpu_moe} MoE layers on CPU")
         return ", ".join(parts)
+
+
+def ffn_override(n: int) -> str:
+    """The -ot value that keeps the FFN weights of blocks 0..n-1 on the CPU."""
+    return "blk\\.(" + "|".join(str(i) for i in range(n)) + ")\\.ffn_(up|gate|down)\\.weight=CPU"
+
+
+def parse_ffn_override(value: str) -> int | None:
+    """n for a value `ffn_override(n)` wrote, else None (a hand-written rule the tuner must not reinterpret)."""
+    m = _FFN_OT.match(value)
+    if not m:
+        return None
+    blocks = m.group(1).split("|")
+    n = len(blocks)
+    return n if blocks == [str(i) for i in range(n)] else None
 
 
 def split_args(text: str) -> list[str]:
@@ -142,6 +166,13 @@ def parse_extra_args(text: str) -> tuple[dict[str, Any], tuple[str, ...]]:
                 val = None  # -1 means unlimited
             typed[fld] = val
             continue
+        if name in _OT_FLAGS and "n_cpu_ffn" not in typed:
+            raw = inline if eq else (toks[i + 1] if i + 1 < len(toks) else "")
+            n = parse_ffn_override(raw)
+            if n:
+                typed["n_cpu_ffn"] = n
+                i += 1 if eq else 2
+                continue
         if name in ("--load-mode", "--cache-ram") and not eq and i + 1 < len(toks):
             i += 2
             continue
@@ -168,6 +199,8 @@ def build_extra_args(cfg: Config) -> str:
         out += ["-tb", str(cfg.threads_batch)]
     if cfg.n_cpu_moe:
         out += ["--n-cpu-moe", str(cfg.n_cpu_moe)]
+    if cfg.n_cpu_ffn:
+        out += ["-ot", ffn_override(cfg.n_cpu_ffn)]
     out += list(ENFORCED_ARGS)
     if cfg.reasoning_budget is not None:
         out += ["--reasoning-budget", str(cfg.reasoning_budget)]
@@ -197,6 +230,7 @@ def from_settings(settings: Mapping[str, Any]) -> Config:
         reasoning_budget=typed.get("reasoning_budget"),
         threads_batch=typed.get("threads_batch"),
         n_cpu_moe=typed.get("n_cpu_moe"),
+        n_cpu_ffn=typed.get("n_cpu_ffn"),
         passthrough=rest,
     )
 
@@ -240,6 +274,8 @@ def fit_params_args(cfg: Config) -> list[str]:
         args += ["-ngl", str(cfg.ngl)]
     if cfg.n_cpu_moe:
         args += ["--n-cpu-moe", str(cfg.n_cpu_moe)]
+    if cfg.n_cpu_ffn:
+        args += ["-ot", ffn_override(cfg.n_cpu_ffn)]
     # llama-fit-params rejects --spec-type, so a draft context (MTP) is not in its projection. The calibration step
     # measures that overhead per architecture instead.
     return args

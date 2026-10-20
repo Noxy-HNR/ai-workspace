@@ -47,7 +47,8 @@ Modes:
    over budget.
 4. **Baseline**: your current settings, measured in the same power state.
 5. **Tune what matters**, noise-aware (3 repetitions, medians, a bar of max(3%, 2x the spread)):
-   speculative decoding (MTP only with an MTP head), draft length and n-gram match length by direction search,
+   for a dense model split across GPU and CPU, FFN-only offload (`-ot`, attention and KV cache stay on the GPU)
+   against the layer split; speculative decoding (MTP only with an MTP head), draft length and n-gram match length by direction search,
    ubatch for prompt speed (never at the expense of context), threads only when layers run on the CPU.
 6. **Quality gates** (medium/full): a faster config that answers worse is rejected.
 7. **Confirm** the winner on a fresh load, restore your model, write the report.

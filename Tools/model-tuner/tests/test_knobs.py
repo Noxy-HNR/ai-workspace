@@ -461,3 +461,40 @@ class TestConfigDiff:
         assert len(d) == 2
         assert d["draft_n_max"] == (None, 2)
         assert d["threads_batch"] == (None, 16)
+
+
+# ============================================================================
+# Per-tensor placement (n_cpu_ffn -> -ot)
+# ============================================================================
+
+class TestFfnOverride:
+    def test_round_trip_through_extra_args(self):
+        cfg = knobs.from_settings(dict(SETTINGS_MEDGEMMA, gpuLayers=999))
+        cfg = cfg.with_(n_cpu_ffn=30)
+        back = knobs.from_settings(knobs.to_settings(cfg))
+        assert back == cfg
+        assert back.passthrough == ()
+        assert "FFN of 30 layers on CPU" in back.describe()
+
+    def test_value_selects_exactly_the_first_n_blocks(self):
+        import re
+        pattern, target = knobs.ffn_override(12).split("=")
+        assert target == "CPU"
+        assert re.search(pattern, "blk.11.ffn_down.weight")
+        assert re.search(pattern, "blk.0.ffn_gate.weight")
+        assert not re.search(pattern, "blk.12.ffn_up.weight")
+        assert not re.search(pattern, "blk.1.attn_q.weight")
+
+    def test_hand_written_rules_stay_in_passthrough(self):
+        rule = r"blk\.(3|4)\.ffn_(up|gate|down)\.weight=CPU"
+        cfg = knobs.from_settings({"contextSize": 8192, "extraArgs": f"-ot {rule}"})
+        assert cfg.n_cpu_ffn is None
+        assert cfg.passthrough == ("-ot", rule)
+
+    def test_fit_params_gets_the_rule(self):
+        args = knobs.fit_params_args(knobs.Config(ctx=8192, n_cpu_ffn=4))
+        assert args[args.index("-ot") + 1] == knobs.ffn_override(4)
+
+    def test_key_of_configs_without_it_is_unchanged(self):
+        assert "n_cpu_ffn" not in knobs.Config(ctx=8192).key()
+        assert "n_cpu_ffn=5" in knobs.Config(ctx=8192, n_cpu_ffn=5).key()
