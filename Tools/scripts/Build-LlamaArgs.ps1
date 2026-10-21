@@ -1,11 +1,12 @@
 # Shared llama-server argument builder.
 #
-# Dot-sourced by both dashboard-server.ps1 and start.ps1 so the two
-# entry points that can launch llama-server never drift out of sync
+# Used by the dashboard's single model-launch path so startup and model
+# switching never drift out of sync
 # (they used to duplicate this logic separately, and start.ps1's copy
 # was missing --cache-type-k/--cache-type-v -- a manual restart would
 # silently drop any tuned KV-cache-quantization setting).
 
+. (Join-Path $PSScriptRoot 'LlamaSafety.ps1')
 . (Join-Path $PSScriptRoot 'ModelStorage.ps1')
 
 function Resolve-LlamaProjectorArgs {
@@ -18,7 +19,8 @@ function Resolve-LlamaProjectorArgs {
         $flag, $inline = ([string]$ArgList[$i] -split '=', 2)
         if ($flag -notin @('--mmproj', '-mm')) { $out += $ArgList[$i]; continue }
         if ($null -ne $inline) { $value = $inline }
-        elseif ($i + 1 -lt $ArgList.Count) { $i++; $value = [string]$ArgList[$i] }
+        # The next flag is never a projector name (the RAM-safety flags always follow extraArgs).
+        elseif ($i + 1 -lt $ArgList.Count -and [string]$ArgList[$i + 1] -notlike '-*') { $i++; $value = [string]$ArgList[$i] }
         else { $value = '' }
         if ([string]::IsNullOrWhiteSpace($value)) { throw "$flag needs a projector file name." }
         # Server copies must have settled, like models, so a projector still being copied never loads.
@@ -47,6 +49,16 @@ function ConvertTo-LlamaArgumentLine {
 
 function Build-LlamaArgs {
     param([string]$ModelPath, $Settings)
+    foreach ($key in @('contextSize', 'parallel', 'batchSize', 'ubatchSize', 'threads')) {
+        $value = 0
+        if (-not [int]::TryParse([string]$Settings.$key, [ref]$value) -or $value -lt 1) {
+            throw "The model profile requires a positive integer for $key."
+        }
+    }
+    $gpuLayers = 0
+    if (-not [int]::TryParse([string]$Settings.gpuLayers, [ref]$gpuLayers) -or $gpuLayers -lt -1) {
+        throw 'The model profile requires a valid GPU layer count (-1 for all, or zero or more).'
+    }
     $argList = @(
         '--model', $ModelPath,
         '--ctx-size', [string]$Settings.contextSize,
@@ -74,23 +86,11 @@ function Build-LlamaArgs {
     if (-not [string]::IsNullOrWhiteSpace($effort) -and $effort -ne 'default') {
         $argList += @('--reasoning-effort', $effort)
     }
-    if (-not [string]::IsNullOrWhiteSpace($Settings.extraArgs)) {
-        $tokenMatches = [regex]::Matches($Settings.extraArgs, '"[^"]*"|''[^'']*''|\S+')
-        $extra = @($tokenMatches | ForEach-Object { $_.Value.Trim('"').Trim("'") })
-        # RAM safety (AGENTS.md): memory-mapped loading and the default prompt cache once exhausted RAM, so
-        # any saved value for these flags is dropped and the safe values below always win.
-        $safe = @()
-        for ($i = 0; $i -lt $extra.Count; $i++) {
-            $flag, $inline = ([string]$extra[$i] -split '=', 2)
-            if ($flag -in @('--load-mode', '-lm', '--cache-ram', '-cram')) {
-                if ($null -eq $inline -and $i + 1 -lt $extra.Count -and $extra[$i + 1] -notlike '-*') { $i++ }
-                continue
-            }
-            $safe += $extra[$i]
-        }
-        $argList += @(Resolve-LlamaProjectorArgs -ArgList $safe -ModelDir (Split-Path -Parent $ModelPath))
-    }
-    # Also for a model with no saved profile yet (e.g. one just added to the model server).
-    $argList += @('--load-mode', 'none', '--cache-ram', '0')
+    $draft = Resolve-LlamaDraftFile -DraftFile $Settings.draftFile -ModelsDir (Split-Path -Parent $ModelPath)
+    if ($draft) { $argList += @('--model-draft', $draft) }
+    # Host placement (--n-cpu-moe, --cpu-moe, -ot) stays in extraArgs, where Model Tuner writes it; the
+    # dashboard's admission check reads the same flags and charges them as host RAM. The safe extraArgs
+    # always end with --load-mode none --cache-ram 0, also for a model with no saved profile yet.
+    $argList += @(Resolve-LlamaProjectorArgs -ArgList @(Get-LlamaSafeExtraArgs -ExtraArgs ([string]$Settings.extraArgs)) -ModelDir (Split-Path -Parent $ModelPath))
     return $argList
 }

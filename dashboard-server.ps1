@@ -269,6 +269,16 @@ function Get-ModelLoadStatus {
     return $result
 }
 
+function Get-LlamaServerState {
+    $processIds = @(Get-Process llama-server -ErrorAction SilentlyContinue | ForEach-Object { [int]$_.Id })
+    $portOwner = Get-PortPid 10000
+    $ownerName = ''
+    if ($portOwner) {
+        try { $ownerName = (Get-Process -Id $portOwner -ErrorAction Stop).ProcessName } catch { $ownerName = 'unknown' }
+    }
+    return @{ processIds = $processIds; portOwner = $portOwner; blockedPort = ($portOwner -and $ownerName -ne 'llama-server') }
+}
+
 function Get-ModelPath {
     # Where a model file loads from: this PC for pinned models, the model server for the rest
     # (Config\model-storage.json). $null when it is in neither place; Get-ModelNotFoundMessage says why.
@@ -277,23 +287,82 @@ function Get-ModelPath {
 }
 
 function Stop-LlamaNative {
-    $stopped = $false
-    $killed = @()
-    $existingPid = Get-PortPid 10000
-    if ($existingPid) {
-        try { Stop-Process -Id $existingPid -Force -ErrorAction SilentlyContinue; $stopped = $true; $killed += [int]$existingPid } catch {}
+    param([int]$TimeoutSeconds = 30, [int]$ExpectedPid = 0)
+    $state = Get-LlamaServerState
+    if ($ExpectedPid -gt 0 -and ($state.processIds.Count -ne 1 -or $state.processIds -notcontains $ExpectedPid)) {
+        return @{ success = $false; message = 'The model process changed. This stop request was ignored to protect the current model.' }
     }
-    Get-Process llama-server -ErrorAction SilentlyContinue | ForEach-Object {
-        Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
-        $stopped = $true
-        $killed += $_.Id
+    if ($state.blockedPort) {
+        return @{ success = $false; message = "Port 10000 belongs to another or unidentified process (PID $($state.portOwner)). It was left running." }
     }
-    # Wait for the processes to actually exit so their VRAM is released before the next model loads;
-    # starting early makes the new model spill into system RAM and load very slowly.
-    foreach ($id in ($killed | Select-Object -Unique)) { Wait-Process -Id $id -Timeout 30 -ErrorAction SilentlyContinue }
-    if ($stopped) { Start-Sleep -Seconds 1 }
-    Remove-Item $LlamaPidFile -Force -ErrorAction SilentlyContinue
-    return @{ success = $true; message = 'llama-server stopped.' }
+    foreach ($serverId in $state.processIds) {
+        Stop-Process -Id $serverId -Force -ErrorAction SilentlyContinue
+    }
+    # A process stuck in kernel I/O can survive Stop-Process. A timeout is a
+    # failed stop, never permission to launch a second model.
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    do {
+        $state = Get-LlamaServerState
+        if ($state.processIds.Count -eq 0 -and -not $state.portOwner) {
+            Remove-Item $LlamaPidFile -Force -ErrorAction SilentlyContinue
+            return @{ success = $true; message = 'llama-server stopped.' }
+        }
+        if ((Get-Date) -ge $deadline) { break }
+        Start-Sleep -Milliseconds 250
+    } while ($true)
+    return @{ success = $false; message = 'llama-server has not fully exited or released port 10000. Wait before retrying; no replacement was started.' }
+}
+
+function Get-LlamaModelAdmission {
+    param([string]$FileName, $Settings)
+    if ([string]::IsNullOrWhiteSpace($FileName) -or $FileName -match '[\\/:]' -or $FileName -match '\.\.') {
+        throw 'Choose a model filename from the Models tab.'
+    }
+    $modelPath = Get-ModelPath $FileName
+    if (-not $modelPath) { throw (Get-ModelNotFoundMessage -FileName $FileName) }
+    $file = Get-Item -LiteralPath $modelPath -ErrorAction Stop
+    $header = Get-GgufHeader -File $file
+    $arch = [string]$header['general.architecture']
+    if (-not $arch -or $arch -eq 'clip' -or $header['general.type'] -eq 'adapter' -or $FileName -match '^mmproj') {
+        throw 'This file is not a standalone language model. Projectors and adapters must be attached to a model.'
+    }
+    $adapterBytes = 0
+    if ($Settings.loraFile) {
+        $adapter = Resolve-LoraPath -FileName ([string]$Settings.loraFile)
+        if (-not $adapter) { throw 'The selected LoRA adapter is missing.' }
+        $adapterBytes = (Get-Item -LiteralPath $adapter).Length
+    }
+    $draft = Resolve-LlamaDraftFile -DraftFile $Settings.draftFile -ModelsDir (Split-Path -Parent $file.FullName)
+    if ($draft) { $adapterBytes += (Get-Item -LiteralPath $draft).Length }
+    $memory = Get-LlamaPhysicalMemory
+    $minimumBytes = Get-LlamaProfileRamMinimumBytes -Value $Settings.minimumAvailableRamGiB
+    # Host placement from extraArgs (--n-cpu-moe, --cpu-moe, -ot), the flags Model Tuner writes.
+    $blockCount = [int]$header["$arch.block_count"]
+    $placement = Get-LlamaHostPlacement -ExtraArgs ([string]$Settings.extraArgs)
+    if ($placement.projectorOnCpu -and $placement.projector) {
+        # --no-mmproj-offload keeps the projector in system RAM. Resolve it the way the launch does.
+        $projector = @(Resolve-LlamaProjectorArgs -ArgList @('--mmproj', [string]$placement.projector) -ModelDir $file.DirectoryName)[1]
+        $adapterBytes += (Get-Item -LiteralPath $projector).Length
+    }
+    $cpuMoeLayers = Get-LlamaCpuMoeLayers -Value $placement.cpuMoeLayers -BlockCount $blockCount
+    if (($cpuMoeLayers -gt 0 -or $placement.allCpuMoe) -and [int]$header["$arch.expert_count"] -le 0) { throw 'CPU expert placement requires a MoE model.' }
+    return Get-LlamaMemoryAdmission -ModelBytes (Get-LlamaModelFileBytes -File $file) -BlockCount $blockCount `
+        -GpuLayers ([int]$Settings.gpuLayers) -AvailableBytes $memory.availableBytes -AdapterBytes $adapterBytes -MinimumAvailableBytes $minimumBytes `
+        -CpuMoeLayers $cpuMoeLayers -CpuFfnLayers $placement.cpuFfnLayers -AllCpuMoe:$placement.allCpuMoe -UnknownCpuOverride:$placement.unknownCpuOverride
+}
+
+function Get-ModelPreflight {
+    param([string]$FileName)
+    try {
+        $settings = Get-ModelSettingsFor -Config (Get-ModelsConfig) -FileName $FileName
+        $bin = Resolve-LlamaServerBinary -Root $Root -DefaultBinary $LlamaBin -Settings $settings
+        [void]@(Build-LlamaArgs -ModelPath (Get-ModelPath $FileName) -Settings $settings)
+        $admission = Get-LlamaModelAdmission -FileName $FileName -Settings $settings
+        $message = 'Physical RAM check passed. It is checked again after the prior server exits; GPU fit still requires a measured trial.'
+        if (-not $admission.allowed) { $message = "Available physical RAM is $($admission.availableGiB) GiB; this profile requires about $($admission.requiredGiB) GiB." }
+        return @{ success = $admission.allowed; filename = $FileName; serverBinary = $bin; contextSize = $settings.contextSize; admission = $admission;
+            message = $message }
+    } catch { return @{ success = $false; message = $_.Exception.Message } }
 }
 
 function Start-LlamaNative {
@@ -301,18 +370,21 @@ function Start-LlamaNative {
 
     # A model can name its own llama-server build (serverBinary, relative to C:\AI or absolute), e.g. a fork
     # for quant types the normal build rejects. Without it, the normal build runs.
-    $bin = $LlamaBin
-    $customBin = if ($Settings -is [System.Collections.IDictionary]) { [string]$Settings['serverBinary'] } else { [string]$Settings.serverBinary }
-    if (-not [string]::IsNullOrWhiteSpace($customBin)) {
-        $bin = if ([System.IO.Path]::IsPathRooted($customBin)) { $customBin } else { Join-Path $Root $customBin }
-    }
-    if (-not (Test-Path $bin)) {
-        return @{ success = $false; message = "llama-server.exe not found at $bin" }
-    }
     $modelPath = Get-ModelPath $FileName
     if (-not $modelPath) {
         return @{ success = $false; message = (Get-ModelNotFoundMessage -FileName $FileName) }
     }
+    # Build the arguments (which resolves any projector) and check RAM before stopping the running server,
+    # so a bad profile, a missing file or an unreachable model server leaves the current model serving.
+    try {
+        $bin = Resolve-LlamaServerBinary -Root $Root -DefaultBinary $LlamaBin -Settings $Settings
+        $argList = @(Build-LlamaArgs -ModelPath $modelPath -Settings $Settings)
+        $admission = Get-LlamaModelAdmission -FileName $FileName -Settings $Settings
+        $state = Get-LlamaServerState
+        if (-not $admission.allowed -and $state.processIds.Count -eq 0) {
+            return @{ success = $false; admission = $admission; message = "Load refused: $($admission.availableGiB) GiB physical RAM available; about $($admission.requiredGiB) GiB required for $FileName." }
+        }
+    } catch { return @{ success = $false; message = $_.Exception.Message } }
 
     # Optional LoRA adapter. Validate before stopping the running server so a bad choice leaves it serving.
     $loraArgs = @()
@@ -339,12 +411,18 @@ function Start-LlamaNative {
         }
     }
 
-    # Build the arguments (which resolves any projector) before stopping the running server, so a missing
-    # file or an unreachable model server leaves the current model serving.
-    try { $argList = @(Build-LlamaArgs -ModelPath $modelPath -Settings $Settings) + $loraArgs }
-    catch { return @{ success = $false; message = $_.Exception.Message } }
+    $stopResult = Stop-LlamaNative
+    if (-not $stopResult.success) { return $stopResult }
+    try {
+        $admission = Get-LlamaModelAdmission -FileName $FileName -Settings $Settings
+        if (-not $admission.allowed) {
+            return @{ success = $false; admission = $admission; message = "Load refused after stopping the prior server: $($admission.availableGiB) GiB physical RAM available; about $($admission.requiredGiB) GiB required for $FileName." }
+        }
+        $state = Get-LlamaServerState
+        if ($state.processIds.Count -gt 0 -or $state.portOwner) { throw 'A server or port owner appeared during the load check. Retry after it exits.' }
+    } catch { return @{ success = $false; message = $_.Exception.Message } }
 
-    Stop-LlamaNative | Out-Null
+    $argList += $loraArgs
     $stdOut = Join-Path $LogDir 'llama.stdout.log'
     $stdErr = Join-Path $LogDir 'llama.stderr.log'
 
@@ -360,7 +438,7 @@ function Start-LlamaNative {
             if ($slots -lt 1) { $slots = 1 }
             if ($ctxSize -gt 0) { Sync-CptrContext -NCtx ([int]($ctxSize / $slots)) }
         } catch {}
-        return @{ success = $true; message = "llama-server starting natively (PID $($p.Id)). Loading $FileName..." }
+        return @{ success = $true; pid = $p.Id; message = "llama-server starting natively (PID $($p.Id)). Loading $FileName..." }
     } catch {
         return @{ success = $false; message = "Failed to start llama-server: $($_.Exception.Message)" }
     }
@@ -659,7 +737,7 @@ function Run-QuickBenchmark {
 }
 
 # Per-model settings that are stored only when set: a non-default llama-server build and a LoRA adapter.
-$OptionalModelKeys = @('serverBinary', 'loraFile', 'loraScale')
+$OptionalModelKeys = @('serverBinary', 'loraFile', 'loraScale', 'minimumAvailableRamGiB', 'draftFile')
 
 function Get-ModelDefaults {
     return [ordered]@{
@@ -726,8 +804,8 @@ function Get-ModelSettingsFor {
 $script:GgufHeaderCache = @{}
 
 function Get-GgufHeader {
-    # The leading GGUF metadata (general.architecture, general.type, general.name, adapter.*), read without
-    # loading the file. llama.cpp writes the general.* keys first, so stopping at the first array is enough.
+    # Read leading identity/layer/expert metadata without touching tensor data. Some
+    # publishers put general.tags arrays before the architecture's layer count.
     param([System.IO.FileInfo]$File)
     $key = "$($File.FullName)|$($File.Length)|$($File.LastWriteTimeUtc.Ticks)"
     if ($script:GgufHeaderCache.ContainsKey($key)) { return $script:GgufHeaderCache[$key] }
@@ -754,11 +832,34 @@ $GgufHeaderReader = {
         if ([System.Text.Encoding]::ASCII.GetString($br.ReadBytes(4)) -eq 'GGUF') {
             [void]$br.ReadUInt32(); [void]$br.ReadUInt64(); $kvCount = $br.ReadUInt64()
             $fixed = @{ 0 = 1; 1 = 1; 2 = 2; 3 = 2; 4 = 4; 5 = 4; 7 = 1; 10 = 8; 11 = 8; 12 = 8 }
-            for ($i = 0; $i -lt [Math]::Min([double]$kvCount, 24); $i++) {
-                $name = [System.Text.Encoding]::UTF8.GetString($br.ReadBytes([int]$br.ReadUInt64()))
+            for ($i = 0; $i -lt [Math]::Min([double]$kvCount, 64); $i++) {
+                $keyLength = $br.ReadUInt64()
+                if ($keyLength -gt 1MB) { break }
+                $name = [System.Text.Encoding]::UTF8.GetString($br.ReadBytes([int]$keyLength))
+                if ($name -like 'tokenizer.*') { break }
                 $type = [int]$br.ReadUInt32()
-                if ($type -eq 8) { $meta[$name] = [System.Text.Encoding]::UTF8.GetString($br.ReadBytes([int]$br.ReadUInt64())) }
+                if ($type -eq 8) {
+                    $length = $br.ReadUInt64()
+                    if ($length -gt 1MB) { break }
+                    $meta[$name] = [System.Text.Encoding]::UTF8.GetString($br.ReadBytes([int]$length))
+                }
+                elseif ($type -eq 4) { $meta[$name] = $br.ReadUInt32() }
+                elseif ($type -eq 5) { $meta[$name] = $br.ReadInt32() }
+                elseif ($type -eq 10) { $meta[$name] = $br.ReadUInt64() }
                 elseif ($type -eq 6) { $meta[$name] = $br.ReadSingle() }
+                elseif ($type -eq 9) {
+                    $itemType = [int]$br.ReadUInt32(); $count = $br.ReadUInt64()
+                    if ($count -gt 1000000) { break }
+                    if ($fixed.ContainsKey($itemType)) {
+                        [void]$fs.Seek([long]($count * $fixed[$itemType]), [IO.SeekOrigin]::Current)
+                    } elseif ($itemType -eq 8) {
+                        for ($j = 0; $j -lt $count; $j++) {
+                            $length = $br.ReadUInt64()
+                            if ($length -gt [uint64]($fs.Length - $fs.Position)) { throw 'Truncated GGUF metadata array.' }
+                            [void]$fs.Seek([long]$length, [IO.SeekOrigin]::Current)
+                        }
+                    } else { break }
+                }
                 elseif ($fixed.ContainsKey($type)) { [void]$br.ReadBytes($fixed[$type]) }
                 else { break }
             }
@@ -833,12 +934,15 @@ function Apply-ModelSettings {
     $config = Get-ModelsConfig
     $settings = Get-ModelSettingsFor -Config $config -FileName $FileName
 
+    $started = Start-LlamaNative -FileName $FileName -Settings $settings
+    if (-not $started.success) { return $started }
+
     if (-not $config.models) { $config | Add-Member -NotePropertyName models -NotePropertyValue ([ordered]@{}) -Force }
     $config.models | Add-Member -NotePropertyName $FileName -NotePropertyValue $settings -Force
     $config.activeModel = $FileName
     Save-ModelsConfig -Config $config
 
-    return Start-LlamaNative -FileName $FileName -Settings $settings
+    return $started
 }
 
 function Start-ModelTrial {
@@ -890,6 +994,16 @@ function Save-ModelConfigOnly {
         if (-not [string]::IsNullOrWhiteSpace([string]$value)) { $merged[$opt] = $value }
     }
     if (-not $merged.Contains('loraFile')) { $merged.Remove('loraScale') }
+    # Reject unsafe cache/load overrides before writing a saved profile.
+    try {
+        $safeExtra = @(Get-LlamaSafeExtraArgs -ExtraArgs ([string]$merged['extraArgs']))
+        [void](Get-LlamaProfileRamMinimumBytes -Value $merged['minimumAvailableRamGiB'])
+        $savedModelPath = Get-ModelPath $FileName
+        if ($merged['draftFile'] -and -not $savedModelPath) { throw (Get-ModelNotFoundMessage -FileName $FileName) }
+        if ($savedModelPath) { [void](Resolve-LlamaDraftFile -DraftFile $merged['draftFile'] -ModelsDir (Split-Path -Parent $savedModelPath)) }
+    }
+    catch { return @{ success = $false; message = $_.Exception.Message } }
+    $merged['extraArgs'] = ($safeExtra | ForEach-Object { if ($_ -match '\s') { '"' + $_ + '"' } else { $_ } }) -join ' '
     if (-not $config.models) { $config | Add-Member -NotePropertyName models -NotePropertyValue ([ordered]@{}) -Force }
     $config.models | Add-Member -NotePropertyName $FileName -NotePropertyValue $merged -Force
     Save-ModelsConfig -Config $config
@@ -1136,7 +1250,11 @@ try {
                     $reader = New-Object IO.StreamReader($request.InputStream)
                     $json = $reader.ReadToEnd(); $reader.Close()
                     $obj = $json | ConvertFrom-Json
-                    $body = (Stop-ServiceByName ([string]$obj.service) | ConvertTo-Json -Depth 10)
+                    if ($obj.service -eq 'llama-server' -and $obj.expectedPid) {
+                        $body = (Stop-LlamaNative -ExpectedPid ([int]$obj.expectedPid) | ConvertTo-Json -Depth 10)
+                    } else {
+                        $body = (Stop-ServiceByName ([string]$obj.service) | ConvertTo-Json -Depth 10)
+                    }
                     break
                 }
                 '^/api/restart$' {
@@ -1277,6 +1395,13 @@ try {
                     }
                     break
                 }
+                '^/api/models/preflight$' {
+                    $reader = New-Object IO.StreamReader($request.InputStream)
+                    $obj = $reader.ReadToEnd() | ConvertFrom-Json
+                    $reader.Close()
+                    $body = (Get-ModelPreflight -FileName ([string]$obj.filename) | ConvertTo-Json -Depth 10)
+                    break
+                }
                 '^/api/models/load$' {
                     $reader = New-Object IO.StreamReader($request.InputStream)
                     $json = $reader.ReadToEnd(); $reader.Close()
@@ -1285,6 +1410,19 @@ try {
                     if ([string]::IsNullOrWhiteSpace($loadName) -or $loadName -match '[\\/:]' -or $loadName -match '\.\.') {
                         $body = (@{ success = $false; message = "Not a model file name: $loadName" } | ConvertTo-Json)
                         break
+                    }
+                    if ($obj.PSObject.Properties.Name -contains 'onlyIfIdle') {
+                        if ($obj.onlyIfIdle -isnot [bool]) {
+                            $body = (@{ success = $false; message = 'onlyIfIdle must be a boolean.' } | ConvertTo-Json)
+                            break
+                        }
+                        if ($obj.onlyIfIdle) {
+                            $idleState = Get-LlamaServerState
+                            if ($idleState.processIds.Count -gt 0 -or $idleState.portOwner) {
+                                $body = (@{ success = $false; message = 'Shared inference is already occupied; no server was stopped.' } | ConvertTo-Json)
+                                break
+                            }
+                        }
                     }
                     $persist = $true
                     if ($obj.PSObject.Properties.Name -contains 'persist') { $persist = [bool]$obj.persist }

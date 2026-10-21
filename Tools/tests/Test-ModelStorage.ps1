@@ -1,4 +1,4 @@
-<#
+﻿<#
   Checks for Tools\scripts\ModelStorage.ps1: config validation, the error text for an unreachable model
   server, and which copy of a model loads (server first, pinned models from this PC, local fallback).
   Uses temporary folders and a reserved test address only; it never touches C:\AI\models or the real share.
@@ -14,7 +14,7 @@ $work = Join-Path ([IO.Path]::GetTempPath()) ("model-storage-test-" + [guid]::Ne
 $fakeRoot = Join-Path $work 'AI'
 $scripts = Join-Path (Join-Path $fakeRoot 'Tools') 'scripts'
 New-Item -ItemType Directory -Force -Path $scripts, (Join-Path $fakeRoot 'Config') | Out-Null
-foreach ($name in @('ModelStorage.ps1', 'Build-LlamaArgs.ps1')) {
+foreach ($name in @('ModelStorage.ps1', 'LlamaSafety.ps1', 'Build-LlamaArgs.ps1')) {
     Copy-Item -LiteralPath (Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) 'scripts') $name) -Destination (Join-Path $scripts $name)
 }
 $configFile = Join-Path $fakeRoot 'Config\model-storage.json'
@@ -123,10 +123,15 @@ try {
     $settings.extraArgs = ''
     $argList = @(Build-LlamaArgs -ModelPath (Join-Path $serverDir 'both.gguf') -Settings $settings)
     Assert-Condition (($argList -join ' ') -match '--load-mode none' -and ($argList -join ' ') -match '--cache-ram 0') 'a model with no saved profile still gets the RAM-safety flags'
+    # Unsafe saved RAM flags are refused (LlamaSafety.ps1), so the running model keeps serving; safe ones normalize once.
     $settings.extraArgs = '--load-mode mmap --cache-ram=8192 -lm=mmap --jinja'
+    $threw = $false
+    try { [void](Build-LlamaArgs -ModelPath (Join-Path $serverDir 'both.gguf') -Settings $settings) } catch { $threw = $_.Exception.Message -match 'load-mode none' }
+    Assert-Condition $threw 'unsafe saved RAM flags stop the load'
+    $settings.extraArgs = '--load-mode none --cache-ram=0 -lm=none --jinja'
     $argList = @(Build-LlamaArgs -ModelPath (Join-Path $serverDir 'both.gguf') -Settings $settings)
     $line = $argList -join ' '
-    Assert-Condition ($line -notmatch 'mmap|8192' -and @($argList | Where-Object { $_ -in '--load-mode', '--cache-ram' }).Count -eq 2 -and $line -match '--load-mode none --cache-ram 0') "unsafe saved RAM flags are replaced by the safe ones: $line"
+    Assert-Condition (@($argList | Where-Object { $_ -in '--load-mode', '--cache-ram' }).Count -eq 2 -and $line -match '--load-mode none --cache-ram 0') "safe saved RAM flags appear once: $line"
     $settings.extraArgs = '--mmproj=mmproj-a.gguf'
     $argList = @(Build-LlamaArgs -ModelPath (Join-Path $serverDir 'both.gguf') -Settings $settings)
     Assert-Condition ($argList[[array]::IndexOf($argList, '--mmproj') + 1] -eq (Join-Path $serverDir 'mmproj-a.gguf')) 'the --mmproj=name form is resolved too'
