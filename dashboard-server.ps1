@@ -286,6 +286,74 @@ function Get-ModelPath {
     return (Resolve-ModelFilePath -FileName $FileName -Kind model)
 }
 
+# ---- Remote model backend (the HP server's llama-server) ----
+# The browser never sees the API key: the dashboard checks the server's health and relays chat
+# requests itself. See Tools\scripts\RemoteBackend.ps1 for where the URL and key come from.
+$RemoteBackendHelper = Join-Path $Root 'Tools\scripts\RemoteBackend.ps1'
+$RemoteBackendConfigFile = Join-Path $Root 'Config\remote-backend.json'
+. $RemoteBackendHelper
+$script:RemoteStatusCache = @{ at = [datetime]::MinValue; value = $null }
+$script:RemoteProxyJobs = New-Object System.Collections.ArrayList
+# A CPU model on the HP can take minutes per reply, and this listener handles one request at a
+# time, so chat requests are relayed from a small runspace pool instead of the listener loop.
+$script:RemoteProxyPool = [runspacefactory]::CreateRunspacePool(1, 2)
+$script:RemoteProxyPool.Open()
+$RemoteProxyMaxPending = 4
+
+function Get-RemoteBackendStatusCached {
+    # /api/backends is polled with /api/status; a few seconds of caching keeps an offline HP
+    # from adding a connect timeout to every refresh.
+    param([switch]$Force)
+    $age = ([datetime]::UtcNow - $script:RemoteStatusCache.at).TotalSeconds
+    if (-not $Force -and $script:RemoteStatusCache.value -and $age -lt 5) { return $script:RemoteStatusCache.value }
+    $config = Get-RemoteBackendConfig -ConfigPath $RemoteBackendConfigFile
+    $value = Get-RemoteBackendStatus -Config $config
+    $script:RemoteStatusCache = @{ at = [datetime]::UtcNow; value = $value }
+    return $value
+}
+
+function Remove-FinishedRemoteProxyJobs {
+    foreach ($job in @($script:RemoteProxyJobs)) {
+        if ($job.handle.IsCompleted) {
+            try { $job.ps.EndInvoke($job.handle) } catch {}
+            $job.ps.Dispose()
+            [void]$script:RemoteProxyJobs.Remove($job)
+        }
+    }
+}
+
+function Start-RemoteChatProxy {
+    # Hands the request to the pool; the runspace writes and closes the response itself.
+    param($Context, [string]$RequestBody)
+    Remove-FinishedRemoteProxyJobs
+    if ($script:RemoteProxyJobs.Count -ge $RemoteProxyMaxPending) { return $false }
+    $config = Get-RemoteBackendConfig -ConfigPath $RemoteBackendConfigFile
+    $ps = [powershell]::Create()
+    $ps.RunspacePool = $script:RemoteProxyPool
+    [void]$ps.AddScript({
+        param($Context, $Helper, $Config, $RequestBody)
+        $response = $Context.Response
+        try {
+            . $Helper
+            $result = Invoke-RemoteChatProxy -Config $Config -RequestBody $RequestBody
+        } catch {
+            $result = @{ status = 500; body = (@{ error = @{ message = $_.Exception.Message } } | ConvertTo-Json -Compress) }
+        }
+        try {
+            $bytes = [Text.Encoding]::UTF8.GetBytes([string]$result.body)
+            $response.StatusCode = [int]$result.status
+            $response.ContentType = 'application/json; charset=utf-8'
+            $response.ContentLength64 = $bytes.Length
+            $response.OutputStream.Write($bytes, 0, $bytes.Length)
+            $response.Close()
+        } catch {
+            try { $response.Abort() } catch {}
+        }
+    }).AddArgument($Context).AddArgument($RemoteBackendHelper).AddArgument($config).AddArgument($RequestBody)
+    [void]$script:RemoteProxyJobs.Add(@{ ps = $ps; handle = $ps.BeginInvoke() })
+    return $true
+}
+
 function Stop-LlamaNative {
     param([int]$TimeoutSeconds = 30, [int]$ExpectedPid = 0)
     $state = Get-LlamaServerState
@@ -1227,6 +1295,9 @@ try {
         $method = $request.HttpMethod
         $body = ''
         $contentType = 'application/json; charset=utf-8'
+        $statusCode = 200
+        # Set when a route hands the response to another runspace, which then owns writing it.
+        $handedOff = $false
 
         # Everything for this one request -- including writing the response -- is
         # wrapped so a single bad request (e.g. a client disconnecting or timing out
@@ -1434,6 +1505,33 @@ try {
                     }
                     break
                 }
+                '^/api/backends$' {
+                    # Local llama-server plus the remote (HP) one, for the backend picker.
+                    $remote = Get-RemoteBackendStatusCached -Force:($request.QueryString['refresh'] -eq '1')
+                    $localState = 'offline'
+                    if (Test-Http "$LlamaHost/v1/models") { $localState = 'ready' }
+                    $body = (@{
+                        local = @{ id = 'local'; name = 'This PC'; url = $LlamaHost; configured = $true; state = $localState }
+                        remote = $remote
+                    } | ConvertTo-Json -Depth 4)
+                    break
+                }
+                '^/api/remote/v1/chat/completions$' {
+                    if ($method -ne 'POST') {
+                        $statusCode = 405
+                        $body = (@{ error = @{ message = 'POST only.' } } | ConvertTo-Json -Compress)
+                        break
+                    }
+                    $reader = New-Object IO.StreamReader($request.InputStream, [Text.Encoding]::UTF8)
+                    $json = $reader.ReadToEnd(); $reader.Close()
+                    if (Start-RemoteChatProxy -Context $context -RequestBody $json) {
+                        $handedOff = $true
+                    } else {
+                        $statusCode = 429
+                        $body = (@{ error = @{ message = 'Too many requests to the remote model are already waiting.' } } | ConvertTo-Json -Compress)
+                    }
+                    break
+                }
 
                 default {
                     $contentType = 'text/html; charset=utf-8'
@@ -1444,6 +1542,7 @@ try {
         } catch {
             $body = (@{success=$false;error=$_.Exception.Message} | ConvertTo-Json -Depth 10)
         }
+        if ($handedOff) { continue }
 
         # Writing can fail on its own (client disconnected / timed out mid-response,
         # which throws from OutputStream.Write) -- that must not crash the listener
@@ -1451,7 +1550,7 @@ try {
         # relying on the try/catch above (which has already run by this point).
         try {
             $bytes = [Text.Encoding]::UTF8.GetBytes($body)
-            $response.StatusCode = 200
+            $response.StatusCode = $statusCode
             $response.ContentType = $contentType
             $response.ContentLength64 = $bytes.Length
             $response.OutputStream.Write($bytes,0,$bytes.Length)
@@ -1463,4 +1562,5 @@ try {
 } finally {
     if ($listener.IsListening) { $listener.Stop() }
     $listener.Close()
+    $script:RemoteProxyPool.Close()
 }
