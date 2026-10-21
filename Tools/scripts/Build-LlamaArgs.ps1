@@ -1,13 +1,25 @@
 # Shared llama-server argument builder.
 #
-# Dot-sourced by both dashboard-server.ps1 and start.ps1 so the two
-# entry points that can launch llama-server never drift out of sync
+# Used by the dashboard's single model-launch path so startup and model
+# switching never drift out of sync
 # (they used to duplicate this logic separately, and start.ps1's copy
 # was missing --cache-type-k/--cache-type-v -- a manual restart would
 # silently drop any tuned KV-cache-quantization setting).
 
+. (Join-Path $PSScriptRoot 'LlamaSafety.ps1')
+
 function Build-LlamaArgs {
     param([string]$ModelPath, $Settings)
+    foreach ($key in @('contextSize', 'parallel', 'batchSize', 'ubatchSize', 'threads')) {
+        $value = 0
+        if (-not [int]::TryParse([string]$Settings.$key, [ref]$value) -or $value -lt 1) {
+            throw "The model profile requires a positive integer for $key."
+        }
+    }
+    $gpuLayers = 0
+    if (-not [int]::TryParse([string]$Settings.gpuLayers, [ref]$gpuLayers) -or $gpuLayers -lt -1) {
+        throw 'The model profile requires a valid GPU layer count (-1 for all, or zero or more).'
+    }
     $argList = @(
         '--model', $ModelPath,
         '--ctx-size', [string]$Settings.contextSize,
@@ -35,9 +47,10 @@ function Build-LlamaArgs {
     if (-not [string]::IsNullOrWhiteSpace($effort) -and $effort -ne 'default') {
         $argList += @('--reasoning-effort', $effort)
     }
-    if (-not [string]::IsNullOrWhiteSpace($Settings.extraArgs)) {
-        $tokenMatches = [regex]::Matches($Settings.extraArgs, '"[^"]*"|''[^'']*''|\S+')
-        foreach ($m in $tokenMatches) { $argList += $m.Value.Trim('"').Trim("'") }
-    }
+    $draft = Resolve-LlamaDraftFile -DraftFile $Settings.draftFile -ModelsDir (Split-Path -Parent $ModelPath)
+    if ($draft) { $argList += @('--model-draft', $draft) }
+    # Host placement (--n-cpu-moe, --cpu-moe, -ot) stays in extraArgs, where Model Tuner writes it; the
+    # dashboard's admission check reads the same flags and charges them as host RAM.
+    $argList += @(Get-LlamaSafeExtraArgs -ExtraArgs ([string]$Settings.extraArgs))
     return $argList
 }

@@ -1761,11 +1761,15 @@
             if (card) card.classList.add('loading');
             addFeedback(`Saving settings and loading ${m.filename}... this restarts llama-server and can take a while for large models.`, 'loading');
             try {
-                await fetch(`${DASHBOARD_API}/api/models/config`, {
+                const saveResp = await fetch(`${DASHBOARD_API}/api/models/config`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ filename: m.filename, settings })
                 });
+                const saved = await saveResp.json();
+                if (!saveResp.ok || !saved.success) {
+                    throw new Error(saved.message || saved.error || 'Settings could not be saved');
+                }
                 const resp = await fetch(`${DASHBOARD_API}/api/models/load`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },

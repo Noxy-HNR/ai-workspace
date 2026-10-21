@@ -37,7 +37,9 @@ param(
     # Start and check the services without opening browser tabs or console windows.
     [switch]$NoUi,
     # Return to the caller after startup (also used by automated validation).
-    [switch]$NoPause
+    [switch]$NoPause,
+    # Open the manager without loading a model or starting other services.
+    [switch]$DashboardOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -47,7 +49,6 @@ $ErrorActionPreference = "Stop"
 # ---------------------------------------------------------------------
 
 $Root = "C:\AI"
-$LlamaBin = Join-Path $Root "Tools\llama-native\bin\llama-server.exe"
 $ModelsDir = Join-Path $Root "models"
 $ModelsConfigFile = Join-Path $Root "Config\models.json"
 $LogDir = Join-Path $Root "Logs"
@@ -56,6 +57,7 @@ $LogDir = Join-Path $Root "Logs"
 $LlamaBaseUrl = "http://127.0.0.1:10000"
 $LlamaHealthUrl = "$LlamaBaseUrl/health"
 $LlamaModelsUrl = "$LlamaBaseUrl/v1/models"
+$DashboardBaseUrl = 'http://127.0.0.1:9090'
 
 $CptrUrl = "http://127.0.0.1:8000"
 
@@ -125,11 +127,28 @@ function Wait-Endpoint {
     param(
         [Parameter(Mandatory=$true)][string]$Url,
         [Parameter(Mandatory=$true)][int]$TimeoutSeconds,
-        [Parameter(Mandatory=$true)][string]$Name
+        [Parameter(Mandatory=$true)][string]$Name,
+        [int]$ExpectedLlamaPid = 0
     )
     $started = Get-Date
     $lastPrint = -15
+    $lowMemorySamples = 0
     while ($true) {
+        if ($ExpectedLlamaPid -gt 0) {
+            $memoryError = $null
+            try {
+                $memory = Get-LlamaPhysicalMemory
+                if ($memory.availableBytes -lt 0.8GB) { $lowMemorySamples++ } else { $lowMemorySamples = 0 }
+            } catch { $memoryError = $_.Exception.Message }
+            if ($lowMemorySamples -ge 3 -or $memoryError) {
+                Warn 'Stopping this startup because available physical RAM is unsafe or could not be read.'
+                try {
+                    $stopBody = @{service='llama-server';expectedPid=$ExpectedLlamaPid}|ConvertTo-Json -Compress
+                    Invoke-RestMethod "$DashboardBaseUrl/api/stop" -Method Post -ContentType 'application/json' -Body $stopBody -TimeoutSec 40 -ErrorAction Stop | Out-Null
+                } catch { Warn $_.Exception.Message }
+                return $false
+            }
+        }
         if (Test-Endpoint -Url $Url -TimeoutSec 5) { return $true }
         $elapsed = [int]((Get-Date) - $started).TotalSeconds
         if ($elapsed -ge $TimeoutSeconds) { return $false }
@@ -164,10 +183,6 @@ if (-not (Test-Path $Root)) {
 
 Set-Location $Root
 
-if (-not (Test-Path $LlamaBin)) {
-    Die "llama-server.exe not found at $LlamaBin. Run setup.ps1 first."
-}
-
 OK "C:\AI found."
 
 # ---------------------------------------------------------------------
@@ -200,6 +215,27 @@ foreach ($dir in $Directories) {
 }
 
 OK "Workspace directories verified."
+. (Join-Path $Root 'Tools\scripts\LlamaSafety.ps1')
+
+# Start the manager first. Every model launch goes through its RAM and
+# process-exit checks, including a normal stack startup.
+Step "Starting dashboard server"
+$dashboardPid = Get-PortPid 9090
+if (-not $dashboardPid) {
+    Start-Process -FilePath 'powershell.exe' -ArgumentList @(
+        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $Root 'dashboard-server.ps1')
+    ) -WorkingDirectory $Root -WindowStyle Hidden `
+        -RedirectStandardOutput (Join-Path $LogDir 'dashboard.stdout.log') `
+        -RedirectStandardError (Join-Path $LogDir 'dashboard.stderr.log') | Out-Null
+}
+if (-not (Wait-Endpoint -Url "$DashboardBaseUrl/api/models" -TimeoutSeconds 30 -Name 'dashboard')) {
+    Die "The dashboard on port 9090 is not responding. Check Logs\dashboard.stderr.log."
+}
+OK "Dashboard is ready at $DashboardBaseUrl"
+if ($DashboardOnly) {
+    if (-not $NoUi) { Start-Process $DashboardBaseUrl }
+    return
+}
 
 # ---------------------------------------------------------------------
 # LOAD ACTIVE MODEL CONFIG
@@ -223,7 +259,6 @@ if (-not (Test-Path $modelPath)) {
     Die "Active model file not found: $modelPath"
 }
 
-$settings = $modelsConfig.models.$activeModel
 OK "Active model: $activeModel"
 
 # ---------------------------------------------------------------------
@@ -233,19 +268,18 @@ OK "Active model: $activeModel"
 Step "Starting llama-server natively"
 
 $existingLlamaPid = Get-PortPid 10000
-if ($existingLlamaPid) {
-    OK "llama-server is already running (PID $existingLlamaPid)."
+$startedLlamaPid = 0
+if ($existingLlamaPid -and (Get-Process -Id $existingLlamaPid -ErrorAction SilentlyContinue).ProcessName -ne 'llama-server') {
+    Die "Port 10000 is occupied by another process (PID $existingLlamaPid)."
+}
+if ($existingLlamaPid -or (Get-Process llama-server -ErrorAction SilentlyContinue)) {
+    OK 'An existing llama-server was detected; waiting for it without switching models.'
 } else {
-    . (Join-Path $Root "Tools\scripts\Build-LlamaArgs.ps1")
-    $argList = Build-LlamaArgs -ModelPath $modelPath -Settings $settings
-
-    $stdOut = Join-Path $LogDir "llama.stdout.log"
-    $stdErr = Join-Path $LogDir "llama.stderr.log"
-
-    $p = Start-Process -FilePath $LlamaBin -ArgumentList $argList -WorkingDirectory (Split-Path $LlamaBin) `
-        -RedirectStandardOutput $stdOut -RedirectStandardError $stdErr -WindowStyle Hidden -PassThru
-
-    OK "llama-server process launched (PID $($p.Id))."
+    $launch = Invoke-RestMethod -Uri "$DashboardBaseUrl/api/start" -Method Post -ContentType 'application/json' `
+        -Body '{"service":"llama-server"}' -TimeoutSec 60 -ErrorAction Stop
+    if (-not $launch.success) { Die $launch.message }
+    $startedLlamaPid = [int]$launch.pid
+    OK $launch.message
 }
 
 # ---------------------------------------------------------------------
@@ -257,7 +291,7 @@ Step "Waiting for llama-server"
 Write-Host "    API : $LlamaBaseUrl" -ForegroundColor DarkGray
 Write-Host ""
 
-if (Wait-Endpoint -Url $LlamaHealthUrl -TimeoutSeconds $LlamaTimeout -Name "llama-server") {
+if (Wait-Endpoint -Url $LlamaHealthUrl -TimeoutSeconds $LlamaTimeout -Name "llama-server" -ExpectedLlamaPid $startedLlamaPid) {
     OK "llama-server API is ready."
 } else {
     Fail "llama-server did not become ready."
@@ -285,23 +319,6 @@ try {
 } catch {
     Warn "Could not query llama-server /v1/models."
     Warn $_.Exception.Message
-}
-
-# ---------------------------------------------------------------------
-# DASHBOARD SERVER
-# ---------------------------------------------------------------------
-
-Step "Starting dashboard server"
-
-$dashboardPid = Get-PortPid 9090
-if ($dashboardPid) {
-    OK "Dashboard server is already running (PID $dashboardPid)."
-} else {
-    Start-Process -FilePath "powershell.exe" -ArgumentList @(
-        "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $Root "dashboard-server.ps1")
-    ) -WorkingDirectory $Root -WindowStyle Hidden | Out-Null
-    Start-Sleep -Seconds 2
-    OK "Dashboard server launched on http://127.0.0.1:9090"
 }
 
 # ---------------------------------------------------------------------
