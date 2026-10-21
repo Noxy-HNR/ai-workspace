@@ -1320,9 +1320,10 @@ try {
                 '^/api/backends$' {
                     # Local llama-server plus the remote (HP) one, for the backend picker.
                     $remote = Get-RemoteBackendStatusCached -Force:($request.QueryString['refresh'] -eq '1')
-                    $localUp = Test-Http "$LlamaHost/v1/models"
+                    $localState = 'offline'
+                    if (Test-Http "$LlamaHost/v1/models") { $localState = 'ready' }
                     $body = (@{
-                        local = @{ id = 'local'; name = 'This PC'; url = $LlamaHost; configured = $true; state = if ($localUp) { 'ready' } else { 'offline' } }
+                        local = @{ id = 'local'; name = 'This PC'; url = $LlamaHost; configured = $true; state = $localState }
                         remote = $remote
                     } | ConvertTo-Json -Depth 4)
                     break

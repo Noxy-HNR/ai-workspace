@@ -41,7 +41,8 @@ function Get-RemoteBackendConfig {
     $fileError = ''
     if ($ConfigPath -and (Test-Path -LiteralPath $ConfigPath)) {
         try { $file = Get-Content -Raw -LiteralPath $ConfigPath | ConvertFrom-Json }
-        catch { $fileError = "Could not read $(Split-Path -Leaf $ConfigPath): $($_.Exception.Message)" }
+        # A fixed message: the parser's own error can quote the file, key included, and this text reaches the browser.
+        catch { $fileError = "Could not read $(Split-Path -Leaf $ConfigPath): it is not valid JSON." }
     }
 
     $name = 'HP server'
@@ -68,10 +69,14 @@ function Get-RemoteBackendConfig {
     $valid = Test-RemoteBackendUrl $url
     $problem = $fileError
     if (-not $problem -and $url -and -not $valid) { $problem = 'The remote URL must be http:// or https:// with no user name, query or fragment.' }
+    # Computed before the hashtable: Windows PowerShell 5.1 can hang on an inline if/else as a
+    # hashtable value (see Get-ScriptRunStatus in dashboard-server.ps1).
+    $safeUrl = ''
+    if ($valid) { $safeUrl = $url }
 
     return @{
         name = $name
-        url = if ($valid) { $url } else { '' }
+        url = $safeUrl
         apiKey = $apiKey.Trim()
         configured = $valid
         source = $source
@@ -107,16 +112,21 @@ function Test-RemotePortOpen {
 }
 
 function Invoke-RemoteHttp {
-    # One HTTP call that never throws: returns @{ status; body; error }. status 0 means no response
-    # (refused, timed out, DNS failure). Non-2xx responses keep their status and body.
+    # One HTTP call that never throws: returns @{ status; body; error }. status 0 means no complete
+    # response (refused, timed out, DNS failure, a body cut off or too slow). Non-2xx responses keep
+    # their status and body. TimeoutMs is a deadline for the whole call, body included, so a server
+    # that trickles bytes cannot hold the dashboard past it.
     param(
         [string]$Method = 'GET',
         [string]$Url,
         [string]$ApiKey,
         [string]$Body,
-        [int]$TimeoutMs = 3000
+        [int]$TimeoutMs = 3000,
+        [int]$MaxBytes = 8MB
     )
     $result = @{ status = 0; body = ''; error = '' }
+    $clock = [Diagnostics.Stopwatch]::StartNew()
+    $req = $null
     try {
         $req = [System.Net.HttpWebRequest]::Create($Url)
         $req.Method = $Method
@@ -147,11 +157,29 @@ function Invoke-RemoteHttp {
         return $result
     }
     try {
+        $stream = $resp.GetResponseStream()
+        $buffer = New-Object byte[] 65536
+        $data = New-Object IO.MemoryStream
+        while ($true) {
+            $left = $TimeoutMs - [int]$clock.ElapsedMilliseconds
+            if ($left -le 0) { throw "No complete reply within $([math]::Round($TimeoutMs / 1000)) s." }
+            # Each read waits at most the time left; the loop re-checks the overall deadline.
+            if ($stream.CanTimeout) { $stream.ReadTimeout = $left }
+            $n = $stream.Read($buffer, 0, $buffer.Length)
+            if ($n -le 0) { break }
+            $data.Write($buffer, 0, $n)
+            if ($data.Length -gt $MaxBytes) { throw "The reply is larger than $($MaxBytes / 1MB) MB." }
+        }
+        $result.body = [Text.Encoding]::UTF8.GetString($data.ToArray())
         $result.status = [int]$resp.StatusCode
-        $reader = New-Object IO.StreamReader($resp.GetResponseStream(), [Text.Encoding]::UTF8)
-        try { $result.body = $reader.ReadToEnd() } finally { $reader.Close() }
     } catch {
-        $result.error = $_.Exception.Message
+        # Headers alone are not a response: report it as a failed call, not as the status they carried.
+        $result.status = 0
+        $result.body = ''
+        $msg = $_.Exception.Message
+        if ($_.Exception.InnerException) { $msg = $_.Exception.InnerException.Message }
+        $result.error = $msg
+        if ($req) { try { $req.Abort() } catch {} }
     } finally {
         $resp.Close()
     }
@@ -168,7 +196,9 @@ function Get-RemoteModelName {
 
 function Get-RemoteBackendStatus {
     # state: not-configured | offline | loading | unauthorized | error | ready
-    param($Config, [int]$TimeoutMs = 3000)
+    # Runs on the dashboard's listener thread: offline costs under a second, and a hung server at
+    # most about two of these timeouts.
+    param($Config, [int]$TimeoutMs = 2000)
     $status = Get-RemoteBackendPublicInfo $Config
     $status.state = 'not-configured'
     $status.model = ''
@@ -220,14 +250,16 @@ function Get-RemoteBackendStatus {
         $status.message = "Could not list models: $detail"
         return $status
     }
-    try {
-        $data = $models.body | ConvertFrom-Json
-        $first = @($data.data)[0]
-        if ($first) {
-            $status.model = Get-RemoteModelName ([string]$first.id)
-            if ($first.meta -and $first.meta.n_ctx_train) { $status.contextSize = [int]$first.meta.n_ctx_train }
-        }
-    } catch {}
+    # A 200 that isn't a model list (a wrong base URL, or a proxy's HTML page) is not a usable backend.
+    $first = $null
+    try { $first = @(($models.body | ConvertFrom-Json).data)[0] } catch {}
+    if (-not $first -or -not $first.id) {
+        $status.state = 'error'
+        $status.message = '/v1/models did not return a model list. Check that the URL points at llama-server.'
+        return $status
+    }
+    $status.model = Get-RemoteModelName ([string]$first.id)
+    if ($first.meta -and $first.meta.n_ctx_train) { $status.contextSize = [int]$first.meta.n_ctx_train }
     $status.state = 'ready'
     return $status
 }

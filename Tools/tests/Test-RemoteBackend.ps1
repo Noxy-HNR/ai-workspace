@@ -61,6 +61,12 @@ $c = Get-RemoteBackendConfig -ConfigPath $broken -Environment @{}
 Assert-Equal $c.configured $false 'unreadable file means not configured'
 Assert-True ($c.problem -match 'Could not read') 'unreadable file is reported'
 
+# A half-typed file with an inline key: the parse error must not carry the key to the browser.
+Set-Content -LiteralPath $broken -Value ('{ "url": "http://hp:10000", "apiKey": "' + $secret + '"') -Encoding UTF8
+$c = Get-RemoteBackendConfig -ConfigPath $broken -Environment @{}
+Assert-True (-not ((Get-RemoteBackendPublicInfo $c) | ConvertTo-Json -Compress).Contains($secret)) 'a malformed file never leaks its key'
+Assert-True (-not ((Get-RemoteBackendStatus -Config $c) | ConvertTo-Json -Compress).Contains($secret)) 'status of a malformed file never leaks its key'
+
 $public = Get-RemoteBackendPublicInfo $fromFile
 Assert-Equal $public.hasKey $true 'public info says a key is set'
 Assert-True (-not $public.ContainsKey('apiKey')) 'public info has no apiKey field'
@@ -72,7 +78,7 @@ Assert-Equal (Get-RemoteModelName 'gpt-oss-20b') 'gpt-oss-20b' 'an alias is kept
 
 # ---- Fake llama-server ----
 $port = Get-FreePort
-$shared = [hashtable]::Synchronized(@{ health = 200; key = $secret; auth = ''; body = ''; redirect = $false })
+$shared = [hashtable]::Synchronized(@{ health = 200; key = $secret; auth = ''; body = ''; redirect = $false; badModels = $false })
 $listener = New-Object System.Net.HttpListener
 $listener.Prefixes.Add("http://127.0.0.1:$port/")
 $listener.Start()
@@ -92,6 +98,7 @@ $serverPs = [powershell]::Create()
             }
             '/v1/models' {
                 if (-not $authorized) { $code = 401; $out = '{"error":{"message":"Invalid API Key"}}' }
+                elseif ($Shared.badModels) { $out = '<html>Welcome</html>' }
                 else { $out = '{"object":"list","data":[{"id":"/srv/models/Cyber-Tiel-Coder-35B-A3B.gguf","object":"model","meta":{"n_ctx_train":262144}}]}' }
             }
             '/v1/chat/completions' {
@@ -101,14 +108,25 @@ $serverPs = [powershell]::Create()
                 elseif (-not $authorized) { $code = 401; $out = '{"error":{"message":"Invalid API Key"}}' }
                 else { $out = '{"choices":[{"message":{"role":"assistant","content":"hello from hp"}}],"usage":{"completion_tokens":3}}' }
             }
+            '/trickle' {
+                # Headers, then one byte at a time: each read succeeds, the whole never finishes in time.
+                $res.StatusCode = 200; $res.ContentLength64 = 100
+                try {
+                    for ($i = 0; $i -lt 30 -and $Listener.IsListening; $i++) { $res.OutputStream.Write([byte[]](32), 0, 1); $res.OutputStream.Flush(); Start-Sleep -Milliseconds 100 }
+                    $res.Abort()
+                } catch {}
+            }
             default { $code = 404; $out = '{"error":{"message":"not found"}}' }
         }
-        $bytes = [Text.Encoding]::UTF8.GetBytes($out)
-        $res.StatusCode = $code
-        $res.ContentType = 'application/json'
-        $res.ContentLength64 = $bytes.Length
-        if ($bytes.Length) { $res.OutputStream.Write($bytes, 0, $bytes.Length) }
-        $res.Close()
+        if ($req.Url.AbsolutePath -eq '/trickle') { continue }   # already answered (or aborted) above
+        try {
+            $bytes = [Text.Encoding]::UTF8.GetBytes($out)
+            $res.StatusCode = $code
+            $res.ContentType = 'application/json'
+            $res.ContentLength64 = $bytes.Length
+            if ($bytes.Length) { $res.OutputStream.Write($bytes, 0, $bytes.Length) }
+            $res.Close()
+        } catch {}
     }
 }).AddArgument($listener).AddArgument($shared)
 $serverHandle = $serverPs.BeginInvoke()
@@ -149,6 +167,17 @@ try {
     $shared.health = 500
     Assert-Equal (Get-RemoteBackendStatus -Config $good).state 'error' 'other /health failures are errors'
     $shared.health = 200
+
+    $shared.badModels = $true
+    Assert-Equal (Get-RemoteBackendStatus -Config $good).state 'error' 'a 200 that is not a model list is an error, not ready'
+    $shared.badModels = $false
+
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    $t = Invoke-RemoteHttp -Url "http://127.0.0.1:$port/trickle" -TimeoutMs 600
+    $sw.Stop()
+    Assert-Equal $t.status 0 'a body that never finishes is a failed call, not a 200'
+    Assert-True ($sw.ElapsedMilliseconds -lt 2000) "the deadline covers the body ($($sw.ElapsedMilliseconds) ms)"
+    Start-Sleep -Milliseconds 3500   # let the fake server finish trickling before the next request
 
     # ---- Chat proxy ----
     $req = '{"model":"default","messages":[{"role":"user","content":"hi"}],"max_tokens":8,"stream":false}'

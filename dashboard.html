@@ -1336,7 +1336,11 @@
             btn.disabled = true;
             btn.textContent = '⏳ Running...';
             
-            addFeedback(`Starting benchmark on ${backendName()} (3 runs)...`, 'info');
+            // Pinned for all three runs, so changing the picker mid-benchmark can't mix machines.
+            const benchBackend = modelBackend;
+            const benchApi = modelApiBase();
+            const benchName = backendName();
+            addFeedback(`Starting benchmark on ${benchName} (3 runs)...`, 'info');
             document.getElementById('benchmarkResults').style.display = 'block';
             document.getElementById('avgTps').textContent = '--';
             document.getElementById('maxTps').textContent = '--';
@@ -1345,7 +1349,7 @@
             try {
                 // Check if the chosen backend is reachable
                 let reachable = true;
-                if (modelBackend === 'hp') {
+                if (benchBackend === 'hp') {
                     const b = await refreshBackends(true);
                     reachable = !!(b && b.remote && b.remote.state === 'ready');
                 } else {
@@ -1354,8 +1358,8 @@
                     } catch { reachable = false; }
                 }
                 if (!reachable) {
-                    const why = modelBackend === 'hp' && backendsCache && backendsCache.remote ? backendsCache.remote.message : 'Start it first.';
-                    addFeedback(`${backendName()} is not reachable. ${why}`, 'error');
+                    const why = benchBackend === 'hp' && backendsCache && backendsCache.remote ? backendsCache.remote.message : 'Start it first.';
+                    addFeedback(`${benchName} is not reachable. ${why}`, 'error');
                     btn.disabled = false;
                     btn.textContent = '▶ Run 3-Run Benchmark';
                     benchmarkRunning = false;
@@ -1370,7 +1374,7 @@
                     const sw = performance.now();
                     
                     try {
-                        const resp = await fetch(`${modelApiBase()}/chat/completions`, {
+                        const resp = await fetch(`${benchApi}/chat/completions`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({
@@ -1407,7 +1411,7 @@
                     document.getElementById('maxTps').textContent = `${max} t/s`;
                     document.getElementById('minTps').textContent = `${min} t/s`;
                     
-                    addFeedback(`Benchmark complete. Avg: ${avg} t/s, Best: ${max} t/s`, 'success');
+                    addFeedback(`Benchmark complete on ${benchName}. Avg: ${avg} t/s, Best: ${max} t/s`, 'success');
                 }
             } catch (e) {
                 addFeedback(`Benchmark error: ${e.message}`, 'error');
@@ -1496,11 +1500,22 @@
         }
 
         // ---- Chat ----
+        // One turn at a time: an HP reply can take minutes, and overlapping turns would interleave the history.
+        let chatPending = false;
         async function sendChat() {
             const input = document.getElementById('chatInput');
             const msg = input.value.trim();
             if (!msg) return;
+            if (chatPending) {
+                addFeedback('Still waiting for the last reply.', 'warn');
+                return;
+            }
+            chatPending = true;
             input.value = '';
+            // Pinned for this turn, so changing the picker mid-reply doesn't mislabel it.
+            const turnBackend = modelBackend;
+            const turnApi = modelApiBase();
+            const turnName = backendName();
             
             addChatMessage('user', msg);
             chatHistory.push({ role: 'user', content: msg });
@@ -1516,7 +1531,7 @@
                     stream: false
                 });
                 
-                const resp = await fetch(`${modelApiBase()}/chat/completions`, {
+                const resp = await fetch(`${turnApi}/chat/completions`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: body
@@ -1530,18 +1545,20 @@
                 } else if (!resp.ok) {
                     // Keep the failed turn out of the history so a retry, or the other backend, starts clean.
                     chatHistory.pop();
-                    const hint = modelBackend === 'hp' ? '\n\nSwitch the model backend to This PC to keep chatting.' : '';
-                    addChatMessage('assistant', `${backendName()} could not answer: ${modelErrorText(resp, data)}${hint}`);
-                    if (modelBackend === 'hp') refreshBackends(true);
+                    const hint = turnBackend === 'hp' ? '\n\nSwitch the model backend to This PC to keep chatting.' : '';
+                    addChatMessage('assistant', `${turnName} could not answer: ${modelErrorText(resp, data)}${hint}`);
+                    if (turnBackend === 'hp') refreshBackends(true);
                 } else {
                     addChatMessage('assistant', 'No response from model.');
                 }
             } catch (e) {
                 chatHistory.pop();
-                const hint = modelBackend === 'hp'
+                const hint = turnBackend === 'hp'
                     ? 'Make sure the dashboard server is running.'
                     : 'Make sure llama-server is running with a model loaded.';
                 addChatMessage('assistant', `Error: ${e.message}\n\n${hint}`);
+            } finally {
+                chatPending = false;
             }
         }
         
