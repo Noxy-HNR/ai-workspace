@@ -19,7 +19,8 @@ function Resolve-LlamaProjectorArgs {
         $flag, $inline = ([string]$ArgList[$i] -split '=', 2)
         if ($flag -notin @('--mmproj', '-mm')) { $out += $ArgList[$i]; continue }
         if ($null -ne $inline) { $value = $inline }
-        elseif ($i + 1 -lt $ArgList.Count) { $i++; $value = [string]$ArgList[$i] }
+        # The next flag is never a projector name (the RAM-safety flags always follow extraArgs).
+        elseif ($i + 1 -lt $ArgList.Count -and [string]$ArgList[$i + 1] -notlike '-*') { $i++; $value = [string]$ArgList[$i] }
         else { $value = '' }
         if ([string]::IsNullOrWhiteSpace($value)) { throw "$flag needs a projector file name." }
         # Server copies must have settled, like models, so a projector still being copied never loads.
