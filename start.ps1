@@ -218,9 +218,16 @@ if ([string]::IsNullOrWhiteSpace($activeModel)) {
     Die "No active model set in Config\models.json. Load a model from the dashboard first."
 }
 
-$modelPath = Join-Path $ModelsDir $activeModel
-if (-not (Test-Path $modelPath)) {
-    Die "Active model file not found: $modelPath"
+# Pinned models load from this PC, the rest straight from the model server (Config\model-storage.json).
+. (Join-Path $Root "Tools\scripts\Build-LlamaArgs.ps1")
+$modelPath = Resolve-ModelFilePath -FileName $activeModel -Kind model
+if (-not $modelPath -or -not (Test-ModelPinnedLocal $activeModel)) {
+    # Only worth a warning when the share was consulted: a pinned local model never touches it.
+    $share = Get-ModelShareStatus
+    if ($share.configured -and -not $share.up) { Warn "Model server unavailable, using this PC's models only. $($share.message)" }
+}
+if (-not $modelPath) {
+    Die (Get-ModelNotFoundMessage -FileName $activeModel)
 }
 
 $settings = $modelsConfig.models.$activeModel
@@ -236,13 +243,12 @@ $existingLlamaPid = Get-PortPid 10000
 if ($existingLlamaPid) {
     OK "llama-server is already running (PID $existingLlamaPid)."
 } else {
-    . (Join-Path $Root "Tools\scripts\Build-LlamaArgs.ps1")
     $argList = Build-LlamaArgs -ModelPath $modelPath -Settings $settings
 
     $stdOut = Join-Path $LogDir "llama.stdout.log"
     $stdErr = Join-Path $LogDir "llama.stderr.log"
 
-    $p = Start-Process -FilePath $LlamaBin -ArgumentList $argList -WorkingDirectory (Split-Path $LlamaBin) `
+    $p = Start-Process -FilePath $LlamaBin -ArgumentList (ConvertTo-LlamaArgumentLine $argList) -WorkingDirectory (Split-Path $LlamaBin) `
         -RedirectStandardOutput $stdOut -RedirectStandardError $stdErr -WindowStyle Hidden -PassThru
 
     OK "llama-server process launched (PID $($p.Id))."
