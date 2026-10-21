@@ -8,7 +8,7 @@ function Assert-Throws {param([scriptblock]$Action,[string]$Label) $bad=$false;t
 $tokens=$null;$errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $stackRoot 'dashboard-server.ps1'),[ref]$tokens,[ref]$errors)
 Assert-Check ($errors.Count -eq 0) 'dashboard parses'
-$wanted=@('Get-GgufHeader','Get-LlamaModelAdmission','Resolve-LoraPath','Get-ModelDefaults','Get-ModelsConfig','Get-ModelSettingsFor','Save-ModelsConfig','Save-ModelConfigOnly','Start-ModelTrial','Get-AvailableModels')
+$wanted=@('Get-GgufHeader','Get-LlamaModelAdmission','Get-ModelPath','Resolve-LoraPath','Get-ModelDefaults','Get-ModelsConfig','Get-ModelSettingsFor','Save-ModelsConfig','Save-ModelConfigOnly','Start-ModelTrial','Get-AvailableModels')
 foreach($node in $ast.FindAll({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst]},$false)){
  if($node.Name -in $wanted){. ([scriptblock]::Create($node.Extent.Text))}
 }
