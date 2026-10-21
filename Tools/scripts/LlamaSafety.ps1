@@ -141,16 +141,22 @@ function Get-LlamaHostPlacement {
     #   cpuFfnLayers  the tuner's own -ot rule: the FFN weights of the listed blocks.
     #   unknownCpuOverride  any other -ot rule that sends tensors to a CPU buffer. Its size cannot be read
     #                 from the pattern, so admission charges it as the whole model.
+    #   projector, projectorOnCpu  --mmproj file, and --no-mmproj-offload keeping it in system RAM.
     param([string]$ExtraArgs)
     # The one -ot rule Model Tuner writes (Config.n_cpu_ffn, kept in step with _FFN_OT in modeltuner/knobs.py).
     $tunerFfnRule = '^blk\\\.\(([0-9|]+)\)\\\.ffn_\(up\|gate\|down\)\\\.weight$'
-    $placement = @{ cpuMoeLayers = 0; allCpuMoe = $false; cpuFfnLayers = @(); unknownCpuOverride = $false }
+    $placement = @{ cpuMoeLayers = 0; allCpuMoe = $false; cpuFfnLayers = @(); unknownCpuOverride = $false; projector = $null; projectorOnCpu = $false }
     $tokens = @([regex]::Matches($ExtraArgs, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value.Trim('"').Trim("'") })
     $ffn = @{}
     for ($i = 0; $i -lt $tokens.Count; $i++) {
         $parts = $tokens[$i] -split '=', 2
         $flag = $parts[0]
         if ($flag -in @('-cmoe', '--cpu-moe')) { $placement.allCpuMoe = $true; continue }
+        if ($flag -in @('-nommproj-offload', '--no-mmproj-offload')) { $placement.projectorOnCpu = $true; continue }
+        if ($flag -in @('-mm', '--mmproj')) {
+            $placement.projector = if ($parts.Count -eq 2) { $parts[1] } elseif ($i + 1 -lt $tokens.Count) { $i++; $tokens[$i] } else { $null }
+            continue
+        }
         if ($flag -notin @('-ncmoe', '--n-cpu-moe', '-ot', '--override-tensor')) { continue }
         $value = if ($parts.Count -eq 2) { $parts[1] } elseif ($i + 1 -lt $tokens.Count) { $i++; $tokens[$i] } else { '' }
         if ($flag -in @('-ncmoe', '--n-cpu-moe')) {
@@ -208,6 +214,7 @@ function Get-LlamaMemoryAdmission {
         availableGiB = [Math]::Round($AvailableBytes / 1GB, 2)
         requiredGiB = [Math]::Round($requiredBytes / 1GB, 2)
         estimatedCpuWeightsGiB = [Math]::Round($cpuBytes / 1GB, 2)
+        companionBytes = $AdapterBytes
         blockCount = $BlockCount
         gpuLayers = $GpuLayers
         cpuMoeLayers = $CpuMoeLayers
@@ -228,6 +235,9 @@ function Resolve-LlamaServerBinary {
         $bin = if ([IO.Path]::IsPathRooted($custom)) { $custom } else { Join-Path $Root $custom }
     }
     if (-not (Test-Path -LiteralPath $bin -PathType Leaf)) { throw "llama-server.exe not found at $bin" }
+    # The stop and one-server checks find a running server by its process name, so a renamed build
+    # would be invisible to them while it loads.
+    if ((Split-Path -Leaf $bin) -ine 'llama-server.exe') { throw "serverBinary must be a llama-server.exe build (got $(Split-Path -Leaf $bin))." }
     return [IO.Path]::GetFullPath($bin)
 }
 
@@ -236,6 +246,11 @@ function Get-LlamaSafeExtraArgs {
     $result = @()
     $tokens = @([regex]::Matches($ExtraArgs, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value.Trim('"').Trim("'") })
     for ($i = 0; $i -lt $tokens.Count; $i++) {
+        # A quoted token is one argument. One that still holds a quote, or a flag with spaces in it, would be
+        # split differently by the native command line than it was checked here.
+        if ($tokens[$i].Contains('"') -or ($tokens[$i] -match '^-' -and $tokens[$i] -match '\s')) {
+            throw "extraArgs token cannot be passed safely to llama-server: $($tokens[$i])"
+        }
         $parts = $tokens[$i] -split '=', 2
         $flag = $parts[0]
         if ($flag -in @('--load-mode', '-lm', '--cache-ram', '-cram')) {
@@ -265,10 +280,38 @@ function Get-LlamaSafeExtraArgs {
             $result += @($flag, $value)
             continue
         }
-        if ($flag -in @('-m', '--model', '-md', '--model-draft', '--spec-draft-model', '-hf', '-hfr', '--hf-repo', '--hf-file', '--host', '--port', '-c', '--ctx-size', '-ngl', '--n-gpu-layers', '--gpu-layers', '-np', '--parallel', '-nkvo', '--no-kv-offload', '-dev', '--device')) {
-            throw "Set model, context, GPU layers and host/port through the profile fields, not extraArgs ($flag)."
+        if ($flag -in @('-m', '--model', '-md', '--model-draft', '--spec-draft-model', '-hf', '-hfr', '--hf-repo', '--hf-file', '--host', '--port', '-c', '--ctx-size', '-ngl', '--n-gpu-layers', '--gpu-layers', '-np', '--parallel', '-nkvo', '--no-kv-offload', '-dev', '--device', '--lora', '--lora-scaled')) {
+            throw "Set model, LoRA, context, GPU layers and host/port through the profile fields, not extraArgs ($flag)."
         }
         $result += $tokens[$i]
     }
     return @($result) + @('--load-mode', 'none', '--cache-ram', '0')
+}
+
+function ConvertTo-LlamaCommandLine {
+    # Windows PowerShell 5.1 joins -ArgumentList with spaces and no quoting, so a validated token with a
+    # space (a projector path) would reach llama-server as two arguments. Quote it the way the C runtime
+    # splits a command line. Tokens never contain a quote (Get-LlamaSafeExtraArgs refuses them).
+    param([string[]]$ArgList)
+    return @($ArgList | ForEach-Object {
+        $token = [string]$_
+        if ($token -eq '') { '""' }
+        elseif ($token -match '\s') { '"' + ($token -replace '(\\+)$', '$1$1') + '"' }
+        else { $token }
+    })
+}
+
+function Get-LlamaModelFileBytes {
+    # llama.cpp loads every shard of a split GGUF from the first one, so all of them count.
+    param([IO.FileInfo]$File)
+    if ($File.Name -notmatch '^(.+)-(\d{5})-of-(\d{5})\.gguf$') { return [long]$File.Length }
+    $prefix = $Matches[1]; $index = [int]$Matches[2]; $count = [int]$Matches[3]
+    if ($index -ne 1 -or $count -lt 1) { throw 'Load a split model from its first shard (-00001-of-...).' }
+    [long]$total = 0
+    for ($n = 1; $n -le $count; $n++) {
+        $shard = Join-Path $File.DirectoryName ('{0}-{1:D5}-of-{2:D5}.gguf' -f $prefix, $n, $count)
+        if (-not (Test-Path -LiteralPath $shard -PathType Leaf)) { throw "Split model shard is missing: $(Split-Path -Leaf $shard)" }
+        $total += (Get-Item -LiteralPath $shard).Length
+    }
+    return $total
 }

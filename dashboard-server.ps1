@@ -316,9 +316,16 @@ function Get-LlamaModelAdmission {
     # Host placement from extraArgs (--n-cpu-moe, --cpu-moe, -ot), the flags Model Tuner writes.
     $blockCount = [int]$header["$arch.block_count"]
     $placement = Get-LlamaHostPlacement -ExtraArgs ([string]$Settings.extraArgs)
+    if ($placement.projectorOnCpu -and $placement.projector) {
+        # --no-mmproj-offload keeps the projector in system RAM. A bare name sits next to the model.
+        $projector = [string]$placement.projector
+        if (-not [IO.Path]::IsPathRooted($projector)) { $projector = Join-Path $file.DirectoryName $projector }
+        if (-not (Test-Path -LiteralPath $projector -PathType Leaf)) { throw "Projector not found: $($placement.projector)" }
+        $adapterBytes += (Get-Item -LiteralPath $projector).Length
+    }
     $cpuMoeLayers = Get-LlamaCpuMoeLayers -Value $placement.cpuMoeLayers -BlockCount $blockCount
     if (($cpuMoeLayers -gt 0 -or $placement.allCpuMoe) -and [int]$header["$arch.expert_count"] -le 0) { throw 'CPU expert placement requires a MoE model.' }
-    return Get-LlamaMemoryAdmission -ModelBytes $file.Length -BlockCount $blockCount `
+    return Get-LlamaMemoryAdmission -ModelBytes (Get-LlamaModelFileBytes -File $file) -BlockCount $blockCount `
         -GpuLayers ([int]$Settings.gpuLayers) -AvailableBytes $memory.availableBytes -AdapterBytes $adapterBytes -MinimumAvailableBytes $minimumBytes `
         -CpuMoeLayers $cpuMoeLayers -CpuFfnLayers $placement.cpuFfnLayers -AllCpuMoe:$placement.allCpuMoe -UnknownCpuOverride:$placement.unknownCpuOverride
 }
@@ -397,7 +404,7 @@ function Start-LlamaNative {
     $stdErr = Join-Path $LogDir 'llama.stderr.log'
 
     try {
-        $p = Start-Process -FilePath $bin -ArgumentList $argList -WorkingDirectory (Split-Path $bin) -RedirectStandardOutput $stdOut -RedirectStandardError $stdErr -WindowStyle Hidden -PassThru
+        $p = Start-Process -FilePath $bin -ArgumentList @(ConvertTo-LlamaCommandLine -ArgList $argList) -WorkingDirectory (Split-Path $bin) -RedirectStandardOutput $stdOut -RedirectStandardError $stdErr -WindowStyle Hidden -PassThru
         try { $p.PriorityClass = 'High' } catch {}
         Set-Content -Path $LlamaPidFile -Value $p.Id -Encoding UTF8
         # Tell cptr the new context right away (the model is still loading, so /props isn't up yet);

@@ -71,6 +71,12 @@ Assert-Check (Get-LlamaMemoryAdmission -ModelBytes 8GB -BlockCount 64 -GpuLayers
 Assert-Check ((Get-LlamaMemoryAdmission -ModelBytes 8GB -BlockCount 64 -GpuLayers 999 -AvailableBytes 8GB -AllCpuMoe).estimatedCpuWeightsGiB -eq 8) '--cpu-moe is charged as the whole model'
 $quoted = @(Get-LlamaSafeExtraArgs '--mmproj "C:\AI\models\a projector.gguf"')
 Assert-Check ($quoted[1] -eq 'C:\AI\models\a projector.gguf') 'quoted projector path survives tokenization'
+# The native command line must split back into exactly the tokens that were checked.
+$line = @(ConvertTo-LlamaCommandLine @('--mmproj', 'C:\AI\models\a projector.gguf', '-ot', 'blk\.(0|1)\.ffn_(up|gate|down)\.weight=CPU', 'C:\dir with space\', ''))
+Assert-Check ($line[1] -eq '"C:\AI\models\a projector.gguf"' -and $line[3] -eq 'blk\.(0|1)\.ffn_(up|gate|down)\.weight=CPU' -and $line[4] -eq '"C:\dir with space\\"' -and $line[5] -eq '""') 'arguments with spaces are quoted for the native command line'
+foreach ($smuggled in @('"--n-gpu-layers 0"', "'--model other.gguf'", '"--mmproj a.gguf --cache-ram 8192"', 'a"b', '--lora big.gguf', '--lora-scaled big.gguf 0.5', '--lora=big.gguf')) {
+    Assert-Throws { Get-LlamaSafeExtraArgs $smuggled } "token that would split or bypass a profile field is refused: $smuggled"
+}
 
 # Define dashboard functions without executing its top-level server loop or services.
 $tokens=$null; $parseErrors=$null
@@ -86,7 +92,7 @@ $scratchRoot = [IO.Path]::GetFullPath((Join-Path $stackRoot 'Scratch'))
 $Root = Join-Path $scratchRoot ('llama-safety-' + [guid]::NewGuid().ToString('N'))
 $ModelsDir = Join-Path $Root 'models'
 $ModelsConfigFile = Join-Path $Root 'models.json'
-$LlamaBin = Join-Path $Root 'default-server.exe'
+$LlamaBin = Join-Path $Root 'default\llama-server.exe'
 $LlamaPidFile = Join-Path $Root 'llama.pid'
 $LogDir = $Root
 $script:GgufHeaderCache = @{}
@@ -111,15 +117,17 @@ function Write-TinyGguf {
 }
 
 try {
+    foreach ($dir in 'default','custom') { New-Item -ItemType Directory -Path (Join-Path $Root $dir) -Force | Out-Null }
     [IO.File]::WriteAllText($LlamaBin, 'fixture, never executed')
-    $customBin = Join-Path $Root 'custom-server.exe'; [IO.File]::WriteAllText($customBin, 'fixture, never executed')
+    $customBin = Join-Path $Root 'custom\llama-server.exe'; [IO.File]::WriteAllText($customBin, 'fixture, never executed')
+    $renamedBin = Join-Path $Root 'custom\fork-server.exe'; [IO.File]::WriteAllText($renamedBin, 'fixture, never executed')
     Write-TinyGguf (Join-Path $ModelsDir 'model.gguf') 'gemma3'
     Write-TinyGguf (Join-Path $ModelsDir 'other.gguf') 'gemma3'
     Write-TinyGguf (Join-Path $ModelsDir 'projector.gguf') 'clip'
     Write-TinyGguf (Join-Path $ModelsDir 'moe.gguf') 'qwen35moe' 128
     $header = Get-GgufHeader (Get-Item (Join-Path $ModelsDir 'model.gguf'))
     Assert-Check ($header['gemma3.block_count'] -eq 62) 'GGUF numeric layer metadata is read'
-    $settings = [ordered]@{contextSize=8192;gpuLayers=999;flashAttn=$true;parallel=1;jinja=$true;batchSize=512;ubatchSize=256;threads=8;cacheTypeK='q8_0';cacheTypeV='q4_0';extraArgs='';serverBinary='custom-server.exe'}
+    $settings = [ordered]@{contextSize=8192;gpuLayers=999;flashAttn=$true;parallel=1;jinja=$true;batchSize=512;ubatchSize=256;threads=8;cacheTypeK='q8_0';cacheTypeV='q4_0';extraArgs='';serverBinary='custom\llama-server.exe'}
     @{activeModel='model.gguf';models=@{'model.gguf'=$settings}} | ConvertTo-Json -Depth 8 | Set-Content $ModelsConfigFile -Encoding UTF8
     $savedInput = [pscustomobject]$settings
     $savedInput | Add-Member -NotePropertyName minimumAvailableRamGiB -NotePropertyValue 4.25
@@ -160,6 +168,26 @@ try {
     Assert-Check (Save-ModelConfigOnly 'model.gguf' $savedInput).success 'clearing extraArgs restores normal placement'
     Assert-Check ((Resolve-LlamaServerBinary $Root $LlamaBin $settings) -eq $customBin) 'profile-specific binary resolves'
     Assert-Throws { Resolve-LlamaServerBinary $Root $LlamaBin @{serverBinary='missing.exe'} } 'missing binary fails before launch'
+    Assert-Throws { Resolve-LlamaServerBinary $Root $LlamaBin @{serverBinary='custom\fork-server.exe'} } 'a renamed build is refused (the one-server checks find servers by name)'
+
+    # Split GGUF: llama.cpp loads every shard from the first, so admission charges all of them.
+    foreach ($n in 1..3) { [IO.File]::WriteAllBytes((Join-Path $ModelsDir ('big-{0:D5}-of-00003.gguf' -f $n)), (New-Object byte[] 1000)) }
+    Assert-Check ((Get-LlamaModelFileBytes (Get-Item (Join-Path $ModelsDir 'big-00001-of-00003.gguf'))) -eq 3000) 'all split shards are charged'
+    Assert-Throws { Get-LlamaModelFileBytes (Get-Item (Join-Path $ModelsDir 'big-00002-of-00003.gguf')) } 'a split model loads only from its first shard'
+    Remove-Item -LiteralPath (Join-Path $ModelsDir 'big-00003-of-00003.gguf')
+    Assert-Throws { Get-LlamaModelFileBytes (Get-Item (Join-Path $ModelsDir 'big-00001-of-00003.gguf')) } 'a missing shard is refused'
+    Assert-Check ((Get-LlamaModelFileBytes (Get-Item (Join-Path $ModelsDir 'model.gguf'))) -eq (Get-Item (Join-Path $ModelsDir 'model.gguf')).Length) 'single-file model is charged its own size'
+
+    # --no-mmproj-offload keeps the projector in system RAM, so its size is charged.
+    [IO.File]::WriteAllBytes((Join-Path $ModelsDir 'big-projector.gguf'), (New-Object byte[] 5000))
+    $settings.extraArgs = '--mmproj big-projector.gguf --load-mode none --cache-ram 0'
+    $gpuProjector = (Get-LlamaModelAdmission -FileName 'model.gguf' -Settings $settings).companionBytes
+    $settings.extraArgs = '--mmproj big-projector.gguf --no-mmproj-offload --load-mode none --cache-ram 0'
+    $cpuProjector = (Get-LlamaModelAdmission -FileName 'model.gguf' -Settings $settings).companionBytes
+    Assert-Check ($cpuProjector -eq 5000 -and $gpuProjector -eq 0) 'CPU projector size is charged; offloaded projector is not'
+    $settings.extraArgs = '--mmproj missing-projector.gguf --no-mmproj-offload'
+    Assert-Throws { Get-LlamaModelAdmission -FileName 'model.gguf' -Settings $settings } 'a missing CPU projector is refused'
+    $settings.extraArgs = ''
     $listed = Get-AvailableModels
     Assert-Check ('projector.gguf' -notin $listed.models.filename) 'dashboard hides non-chat projector'
     $settings.contextSize=0; Assert-Throws { Build-LlamaArgs 'model.gguf' $settings } 'zero context is refused'; $settings.contextSize=8192
