@@ -45,7 +45,8 @@ dashboard-server.ps1, dashboard.html   Local AI dashboard (port 9090)
 start.ps1, stop.ps1, update.ps1        Start, stop, and update the stack
 setup.ps1, model-*.ps1                 Setup and model management
 llama-proxy.py                         Logging proxy (port 10001) in front of llama-server
-Config/                                Model settings (models.json)
+Config/                                Model settings (models.json, model-storage.json)
+docs/                                  Guides (loading models from the home server)
 Tools/
   model-tuner/                         Settings search and benchmark (Python)
   local-coding-agent/                  OpenCode profile for local models
@@ -90,7 +91,11 @@ several GB of idle RAM overhead and starts noticeably faster.
 
 ## Models
 
-Available models are scanned from `C:\AI\models\*.gguf`. Per-model startup parameters
+Available models are scanned from `C:\AI\models\*.gguf` and, when one is configured in
+`Config\model-storage.json`, the home model server's Samba share. Server models load straight
+over SMB with no local copy; pinned models and every local model keep working with the server
+off. See [docs/MODEL-SERVER.md](docs/MODEL-SERVER.md) for the setup, error messages and SMB
+multichannel. Per-model startup parameters
 (context size, GPU layers, batch size, and so on) are stored in `Config\models.json` and
 edited from the dashboard's Models tab. Loading a model there stops any running llama-server
 process and starts a new one with that model's saved settings.
@@ -104,6 +109,7 @@ The dashboard does not modify your `.env`, model files, or cptr installation.
 | Relay Station | `py -m unittest discover -s tests -t .` (in `TelegramBot/`) |
 | Model Tuner | `uv run --with pytest pytest -q` (in `Tools/model-tuner/`) |
 | Model Tuner, from a scratch venv | `python -m pytest -q` after `pip install pytest` |
+| Model storage (server share) | `powershell -NoProfile -ExecutionPolicy Bypass -File Tools\tests\Test-ModelStorage.ps1` |
 
 The Relay Station suite passes (119 tests, stdlib only). Test coverage for the remaining
 components is listed in each component's README.

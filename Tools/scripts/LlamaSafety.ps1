@@ -288,18 +288,6 @@ function Get-LlamaSafeExtraArgs {
     return @($result) + @('--load-mode', 'none', '--cache-ram', '0')
 }
 
-function ConvertTo-LlamaCommandLine {
-    # Windows PowerShell 5.1 joins -ArgumentList with spaces and no quoting, so a validated token with a
-    # space (a projector path) would reach llama-server as two arguments. Quote it the way the C runtime
-    # splits a command line. Tokens never contain a quote (Get-LlamaSafeExtraArgs refuses them).
-    param([string[]]$ArgList)
-    return @($ArgList | ForEach-Object {
-        $token = [string]$_
-        if ($token -eq '') { '""' }
-        elseif ($token -match '\s') { '"' + ($token -replace '(\\+)$', '$1$1') + '"' }
-        else { $token }
-    })
-}
 
 function Get-LlamaModelFileBytes {
     # llama.cpp loads every shard of a split GGUF from the first one, so all of them count.

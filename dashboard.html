@@ -130,6 +130,7 @@
         .status-green { color: var(--accent-green); }
         .status-red { color: var(--accent-red); }
         .status-yellow { color: var(--accent-yellow); }
+        .model-server-notice { border: 1px solid var(--accent-yellow); color: var(--accent-yellow); border-radius: 8px; padding: 10px 14px; margin-bottom: 16px; font-size: 13px; }
         .status-blue { color: var(--accent-blue); }
         
         /* Service Status */
@@ -723,7 +724,7 @@
             <div class="section">
                 <div class="section-title">Available Models</div>
                 <p style="color: var(--text-secondary); margin-bottom: 16px;">
-                    Scanned from C:\AI\models. Click a model to edit its startup parameters, or Load to switch to it.
+                    Scanned from C:\AI\models and the model server (Config\model-storage.json). Click a model to edit its startup parameters, or Load to switch to it.
                 </p>
                 <div id="modelLoadProgress" class="model-load-progress" style="display:none;">
                     <div class="loading-spinner"></div>
@@ -732,6 +733,7 @@
                         <div id="modelLoadElapsed" class="model-load-elapsed">0s elapsed</div>
                     </div>
                 </div>
+                <div id="modelServerNotice" class="model-server-notice" style="display:none;"></div>
                 <div class="models-grid" id="modelsGrid">
                     <div class="model-card"><h3>Loading...</h3></div>
                 </div>
@@ -1472,6 +1474,7 @@
                 const resp = await fetch(`${DASHBOARD_API}/api/models`);
                 const data = await resp.json();
                 modelsCache = data.models || [];
+                renderModelServerNotice(data.modelServer);
                 try {
                     const loraResp = await fetch(`${DASHBOARD_API}/api/loras`);
                     lorasCache = (await loraResp.json()).adapters || [];
@@ -1480,6 +1483,19 @@
                 updateActiveModelStat();
             } catch (e) {
                 grid.innerHTML = `<div class="model-card"><h3 style="color:var(--accent-red)">Could not load models: ${escapeHtml(e.message)}</h3></div>`;
+            }
+        }
+
+        function renderModelServerNotice(server) {
+            const el = document.getElementById('modelServerNotice');
+            if (server && server.configured && !server.online) {
+                el.textContent = `Model server unavailable, showing this PC's models only. ${server.message || ''}`;
+                el.style.display = 'block';
+            } else if (server && !server.configured && server.message && server.message.includes('model-storage.json could not')) {
+                el.textContent = server.message;
+                el.style.display = 'block';
+            } else {
+                el.style.display = 'none';
             }
         }
 
@@ -1501,7 +1517,7 @@
         function renderModelsList() {
             const grid = document.getElementById('modelsGrid');
             if (modelsCache.length === 0) {
-                grid.innerHTML = '<div class="model-card"><h3>No .gguf files found in C:\\AI\\models</h3></div>';
+                grid.innerHTML = '<div class="model-card"><h3>No .gguf files found in C:\\AI\\models or on the model server</h3></div>';
                 return;
             }
             
@@ -1516,6 +1532,10 @@
                             <div class="model-stat">
                                 <div class="label">Size</div>
                                 <div class="value">${m.sizeGB} GB</div>
+                            </div>
+                            <div class="model-stat">
+                                <div class="label">Loads from</div>
+                                <div class="value" style="font-size:12px;">${m.location === 'network' ? 'Model server' : (m.pinnedLocal ? 'This PC (pinned)' : 'This PC')}</div>
                             </div>
                             <div class="model-stat">
                                 <div class="label">Modified</div>
@@ -1751,6 +1771,16 @@
                 } catch (e) {
                     // still loading / not up yet -- keep polling
                 }
+                // A server that exited (bad file, or the model server dropped mid-read) won't come up; say so now.
+                try {
+                    const st = await (await fetch(`${DASHBOARD_API}/api/models/load-status`, { signal: AbortSignal.timeout(5000) })).json();
+                    if (st && st.running === false && modelLoadPollTimer) {
+                        stopModelLoadPolling();
+                        addFeedback(st.message || `llama-server exited while loading ${filename}.`, 'error');
+                        loadModelsList();
+                        refreshAll();
+                    }
+                } catch (e) { /* dashboard busy -- check again next tick */ }
             }, 3000);
         }
 

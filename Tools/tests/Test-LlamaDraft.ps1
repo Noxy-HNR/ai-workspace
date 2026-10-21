@@ -18,6 +18,7 @@ $scratchRoot=[IO.Path]::GetFullPath((Join-Path $stackRoot 'Scratch'))
 $Root=Join-Path $scratchRoot ('draft-safety-'+[guid]::NewGuid().ToString('N'))
 $ModelsDir=Join-Path $Root 'models';$drafts=Join-Path $ModelsDir 'drafts'
 $ModelsConfigFile=Join-Path $Root 'models.json';$script:GgufHeaderCache=@{}
+$script:ModelStorageConfigFile=Join-Path $Root 'model-storage.json'
 New-Item -ItemType Directory -Path $drafts -Force|Out-Null
 function Write-TinyGguf {
  param([string]$Path,[string]$Architecture)

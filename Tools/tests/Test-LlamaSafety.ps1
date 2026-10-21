@@ -72,8 +72,8 @@ Assert-Check ((Get-LlamaMemoryAdmission -ModelBytes 8GB -BlockCount 64 -GpuLayer
 $quoted = @(Get-LlamaSafeExtraArgs '--mmproj "C:\AI\models\a projector.gguf"')
 Assert-Check ($quoted[1] -eq 'C:\AI\models\a projector.gguf') 'quoted projector path survives tokenization'
 # The native command line must split back into exactly the tokens that were checked.
-$line = @(ConvertTo-LlamaCommandLine @('--mmproj', 'C:\AI\models\a projector.gguf', '-ot', 'blk\.(0|1)\.ffn_(up|gate|down)\.weight=CPU', 'C:\dir with space\', ''))
-Assert-Check ($line[1] -eq '"C:\AI\models\a projector.gguf"' -and $line[3] -eq 'blk\.(0|1)\.ffn_(up|gate|down)\.weight=CPU' -and $line[4] -eq '"C:\dir with space\\"' -and $line[5] -eq '""') 'arguments with spaces are quoted for the native command line'
+$line = ConvertTo-LlamaArgumentLine @('--mmproj', 'C:\AI\models\a projector.gguf', '-ot', 'blk\.(0|1)\.ffn_(up|gate|down)\.weight=CPU', 'C:\dir with space\', '')
+Assert-Check ($line -ceq '--mmproj "C:\AI\models\a projector.gguf" -ot blk\.(0|1)\.ffn_(up|gate|down)\.weight=CPU "C:\dir with space\\" ""') 'arguments with spaces are quoted for the native command line'
 foreach ($smuggled in @('"--n-gpu-layers 0"', "'--model other.gguf'", '"--mmproj a.gguf --cache-ram 8192"', 'a"b', '--lora big.gguf', '--lora-scaled big.gguf 0.5', '--lora=big.gguf')) {
     Assert-Throws { Get-LlamaSafeExtraArgs $smuggled } "token that would split or bypass a profile field is refused: $smuggled"
 }
@@ -96,6 +96,8 @@ $LlamaBin = Join-Path $Root 'default\llama-server.exe'
 $LlamaPidFile = Join-Path $Root 'llama.pid'
 $LogDir = $Root
 $script:GgufHeaderCache = @{}
+# Fixture models only: no model-storage.json, so the model server is never consulted.
+$script:ModelStorageConfigFile = Join-Path $Root 'model-storage.json'
 New-Item -ItemType Directory -Path $ModelsDir -Force | Out-Null
 
 function Write-TinyGguf {

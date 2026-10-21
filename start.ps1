@@ -254,9 +254,16 @@ if ([string]::IsNullOrWhiteSpace($activeModel)) {
     Die "No active model set in Config\models.json. Load a model from the dashboard first."
 }
 
-$modelPath = Join-Path $ModelsDir $activeModel
-if (-not (Test-Path $modelPath)) {
-    Die "Active model file not found: $modelPath"
+# Pinned models load from this PC, the rest straight from the model server (Config\model-storage.json).
+. (Join-Path $Root "Tools\scripts\Build-LlamaArgs.ps1")
+$modelPath = Resolve-ModelFilePath -FileName $activeModel -Kind model
+if (-not $modelPath -or -not (Test-ModelPinnedLocal $activeModel)) {
+    # Only worth a warning when the share was consulted: a pinned local model never touches it.
+    $share = Get-ModelShareStatus
+    if ($share.configured -and -not $share.up) { Warn "Model server unavailable, using this PC's models only. $($share.message)" }
+}
+if (-not $modelPath) {
+    Die (Get-ModelNotFoundMessage -FileName $activeModel)
 }
 
 OK "Active model: $activeModel"

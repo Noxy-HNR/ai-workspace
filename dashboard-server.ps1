@@ -249,10 +249,24 @@ function Get-ServiceStatus {
 
 . (Join-Path $Root 'Tools\scripts\Build-LlamaArgs.ps1')
 
-function Get-ModelPath {
-    # Where a model file loads from. One place, so every launch and admission check reads the same file.
-    param([string]$FileName)
-    return (Join-Path $ModelsDir $FileName)
+function Get-ModelLoadStatus {
+    # Whether the llama-server started by the last load is still alive. The dashboard polls this while a
+    # model loads, so a server that exits early (e.g. the model server dropped mid-read) is reported
+    # right away instead of after the 10-minute load timeout.
+    $loadPid = 0
+    if (Test-Path -LiteralPath $LlamaPidFile) { [void][int]::TryParse((Get-Content -LiteralPath $LlamaPidFile -Raw).Trim(), [ref]$loadPid) }
+    $running = $loadPid -gt 0 -and [bool](Get-Process -Id $loadPid -ErrorAction SilentlyContinue)
+    $result = @{ running = $running; pid = $loadPid; message = '' }
+    if (-not $running) {
+        $stdErr = Join-Path $LogDir 'llama.stderr.log'
+        $tail = @()
+        if (Test-Path -LiteralPath $stdErr) { $tail = @(Get-Content -LiteralPath $stdErr -Tail 40 -ErrorAction SilentlyContinue | Where-Object { $_.Trim() }) }
+        $lastError = @($tail | Where-Object { $_ -match 'error|failed|unable|cannot' } | Select-Object -Last 1)
+        $result.message = if ($lastError) { "llama-server exited while loading: $($lastError[0].Trim())" } else { 'llama-server exited while loading. See the Logs tab for llama-server output.' }
+        $share = Get-ModelShareStatus -Refresh
+        if ($share.configured -and -not $share.up) { $result.message += " The model server is no longer reachable. $($share.message)" }
+    }
+    return $result
 }
 
 function Get-LlamaServerState {
@@ -263,6 +277,13 @@ function Get-LlamaServerState {
         try { $ownerName = (Get-Process -Id $portOwner -ErrorAction Stop).ProcessName } catch { $ownerName = 'unknown' }
     }
     return @{ processIds = $processIds; portOwner = $portOwner; blockedPort = ($portOwner -and $ownerName -ne 'llama-server') }
+}
+
+function Get-ModelPath {
+    # Where a model file loads from: this PC for pinned models, the model server for the rest
+    # (Config\model-storage.json). $null when it is in neither place; Get-ModelNotFoundMessage says why.
+    param([string]$FileName)
+    return (Resolve-ModelFilePath -FileName $FileName -Kind model)
 }
 
 function Stop-LlamaNative {
@@ -297,7 +318,9 @@ function Get-LlamaModelAdmission {
     if ([string]::IsNullOrWhiteSpace($FileName) -or $FileName -match '[\\/:]' -or $FileName -match '\.\.') {
         throw 'Choose a model filename from the Models tab.'
     }
-    $file = Get-Item -LiteralPath (Get-ModelPath $FileName) -ErrorAction Stop
+    $modelPath = Get-ModelPath $FileName
+    if (-not $modelPath) { throw (Get-ModelNotFoundMessage -FileName $FileName) }
+    $file = Get-Item -LiteralPath $modelPath -ErrorAction Stop
     $header = Get-GgufHeader -File $file
     $arch = [string]$header['general.architecture']
     if (-not $arch -or $arch -eq 'clip' -or $header['general.type'] -eq 'adapter' -or $FileName -match '^mmproj') {
@@ -317,10 +340,8 @@ function Get-LlamaModelAdmission {
     $blockCount = [int]$header["$arch.block_count"]
     $placement = Get-LlamaHostPlacement -ExtraArgs ([string]$Settings.extraArgs)
     if ($placement.projectorOnCpu -and $placement.projector) {
-        # --no-mmproj-offload keeps the projector in system RAM. A bare name sits next to the model.
-        $projector = [string]$placement.projector
-        if (-not [IO.Path]::IsPathRooted($projector)) { $projector = Join-Path $file.DirectoryName $projector }
-        if (-not (Test-Path -LiteralPath $projector -PathType Leaf)) { throw "Projector not found: $($placement.projector)" }
+        # --no-mmproj-offload keeps the projector in system RAM. Resolve it the way the launch does.
+        $projector = @(Resolve-LlamaProjectorArgs -ArgList @('--mmproj', [string]$placement.projector) -ModelDir $file.DirectoryName)[1]
         $adapterBytes += (Get-Item -LiteralPath $projector).Length
     }
     $cpuMoeLayers = Get-LlamaCpuMoeLayers -Value $placement.cpuMoeLayers -BlockCount $blockCount
@@ -349,19 +370,21 @@ function Start-LlamaNative {
 
     # A model can name its own llama-server build (serverBinary, relative to C:\AI or absolute), e.g. a fork
     # for quant types the normal build rejects. Without it, the normal build runs.
+    $modelPath = Get-ModelPath $FileName
+    if (-not $modelPath) {
+        return @{ success = $false; message = (Get-ModelNotFoundMessage -FileName $FileName) }
+    }
+    # Build the arguments (which resolves any projector) and check RAM before stopping the running server,
+    # so a bad profile, a missing file or an unreachable model server leaves the current model serving.
     try {
         $bin = Resolve-LlamaServerBinary -Root $Root -DefaultBinary $LlamaBin -Settings $Settings
-        $argList = @(Build-LlamaArgs -ModelPath (Get-ModelPath $FileName) -Settings $Settings)
+        $argList = @(Build-LlamaArgs -ModelPath $modelPath -Settings $Settings)
         $admission = Get-LlamaModelAdmission -FileName $FileName -Settings $Settings
         $state = Get-LlamaServerState
         if (-not $admission.allowed -and $state.processIds.Count -eq 0) {
             return @{ success = $false; admission = $admission; message = "Load refused: $($admission.availableGiB) GiB physical RAM available; about $($admission.requiredGiB) GiB required for $FileName." }
         }
     } catch { return @{ success = $false; message = $_.Exception.Message } }
-    $modelPath = Get-ModelPath $FileName
-    if (-not (Test-Path $modelPath)) {
-        return @{ success = $false; message = "Model file not found: $FileName" }
-    }
 
     # Optional LoRA adapter. Validate before stopping the running server so a bad choice leaves it serving.
     $loraArgs = @()
@@ -369,7 +392,7 @@ function Start-LlamaNative {
     if (-not [string]::IsNullOrWhiteSpace($loraFile)) {
         $loraPath = Resolve-LoraPath -FileName $loraFile
         if (-not $loraPath) {
-            return @{ success = $false; message = "LoRA adapter not found: $loraFile (put adapters in C:\AI\models or C:\AI\models\lora)" }
+            return @{ success = $false; message = "LoRA adapter not found: $loraFile (put adapters in models or models\lora, on this PC or the model server)" }
         }
         $modelArch = [string](Get-GgufHeader -File (Get-Item -LiteralPath $modelPath))['general.architecture']
         $loraArch = [string](Get-GgufHeader -File (Get-Item -LiteralPath $loraPath))['general.architecture']
@@ -404,7 +427,7 @@ function Start-LlamaNative {
     $stdErr = Join-Path $LogDir 'llama.stderr.log'
 
     try {
-        $p = Start-Process -FilePath $bin -ArgumentList @(ConvertTo-LlamaCommandLine -ArgList $argList) -WorkingDirectory (Split-Path $bin) -RedirectStandardOutput $stdOut -RedirectStandardError $stdErr -WindowStyle Hidden -PassThru
+        $p = Start-Process -FilePath $bin -ArgumentList (ConvertTo-LlamaArgumentLine $argList) -WorkingDirectory (Split-Path $bin) -RedirectStandardOutput $stdOut -RedirectStandardError $stdErr -WindowStyle Hidden -PassThru
         try { $p.PriorityClass = 'High' } catch {}
         Set-Content -Path $LlamaPidFile -Value $p.Id -Encoding UTF8
         # Tell cptr the new context right away (the model is still loading, so /props isn't up yet);
@@ -614,7 +637,7 @@ function Invoke-TunerAction {
     param($Request)
     $action = [string]$Request.action
     $model = [string]$Request.model
-    if ($model -and ($model -match '[\/:]' -or $model -match '\.\.' -or -not (Test-Path (Get-ModelPath $model)))) {
+    if ($model -and ($model -match '[\/:]' -or $model -match '\.\.' -or -not (Get-ModelPath $model))) {
         return @{ success = $false; message = "Unknown model: $model" }
     }
     switch ($action) {
@@ -786,10 +809,25 @@ function Get-GgufHeader {
     param([System.IO.FileInfo]$File)
     $key = "$($File.FullName)|$($File.Length)|$($File.LastWriteTimeUtc.Ticks)"
     if ($script:GgufHeaderCache.ContainsKey($key)) { return $script:GgufHeaderCache[$key] }
+    if (Test-ModelNetworkPath $File.FullName) {
+        # A file on the model server is read with a deadline; a timeout is not remembered, so it is retried.
+        $r = Invoke-ModelShareIO -Script $GgufHeaderReader -Arguments @($File.FullName)
+        if (-not $r.done) { return @{} }
+        $meta = @($r.value)[0]
+        $meta = if ($meta -is [hashtable]) { [hashtable]$meta } else { @{} }
+    } else {
+        $meta = & $GgufHeaderReader $File.FullName
+    }
+    $script:GgufHeaderCache[$key] = $meta
+    return $meta
+}
+
+$GgufHeaderReader = {
+    param([string]$Path)
     $meta = @{}
     $fs = $null
     try {
-        $fs = [System.IO.File]::OpenRead($File.FullName)
+        $fs = [System.IO.File]::OpenRead($Path)
         $br = New-Object System.IO.BinaryReader($fs)
         if ([System.Text.Encoding]::ASCII.GetString($br.ReadBytes(4)) -eq 'GGUF') {
             [void]$br.ReadUInt32(); [void]$br.ReadUInt64(); $kvCount = $br.ReadUInt64()
@@ -827,27 +865,25 @@ function Get-GgufHeader {
             }
         }
     } catch { } finally { if ($fs) { $fs.Dispose() } }
-    $script:GgufHeaderCache[$key] = $meta
     return $meta
 }
 
 function Resolve-LoraPath {
-    # LoRA adapters live in C:\AI\models or C:\AI\models\lora; a bare file name only, never a path.
+    # LoRA adapters live in models or models\lora, on this PC first, then on the model server.
+    # A bare file name only, never a path.
     param([string]$FileName)
-    if ([string]::IsNullOrWhiteSpace($FileName) -or $FileName -match '[\\/:]' -or $FileName -match '\.\.') { return $null }
-    foreach ($dir in @($ModelsDir, (Join-Path $ModelsDir 'lora'))) {
-        $p = Join-Path $dir $FileName
-        if (Test-Path -LiteralPath $p -PathType Leaf) { return $p }
-    }
-    return $null
+    return (Resolve-ModelFilePath -FileName $FileName -Kind lora)
 }
 
 function Get-LoraAdapters {
     $result = @()
-    foreach ($dir in @($ModelsDir, (Join-Path $ModelsDir 'lora'))) {
-        foreach ($f in (Get-ChildItem $dir -Filter '*.gguf' -File -ErrorAction SilentlyContinue | Sort-Object Name)) {
+    $seen = @{}
+    foreach ($dir in (Get-ModelStorageDirs -Kind lora)) {
+        foreach ($f in (Get-ModelDirGguf -Dir $dir | Sort-Object Name)) {
+            if ($seen.ContainsKey($f.Name)) { continue }
             $hdr = Get-GgufHeader -File $f
             if ($hdr['general.type'] -ne 'adapter') { continue }
+            $seen[$f.Name] = $true
             $result += [ordered]@{
                 filename     = $f.Name
                 sizeGB       = [math]::Round($f.Length / 1GB, 2)
@@ -862,11 +898,12 @@ function Get-LoraAdapters {
 
 function Get-AvailableModels {
     $config = Get-ModelsConfig
-    $files = Get-ChildItem $ModelsDir -Filter '*.gguf' -File -ErrorAction SilentlyContinue
+    # This PC and the model server together; new files on the server appear here on the next refresh.
+    $share = Get-ModelShareStatus
     $result = @()
-    foreach ($f in ($files | Sort-Object Name)) {
+    foreach ($entry in (Get-ModelStorageFiles | Sort-Object Name)) {
+        $f = $entry.File
         $hdr = Get-GgufHeader -File $f
-        # Projectors and adapters are not standalone chat models; loading one as a model fails or misbehaves.
         if ($hdr['general.type'] -eq 'adapter' -or $hdr['general.architecture'] -eq 'clip' -or $f.Name -match '^mmproj') { continue }
         $settings = Get-ModelSettingsFor -Config $config -FileName $f.Name
         $hasConfig = $config.models -and ($config.models.PSObject.Properties.Name -contains $f.Name)
@@ -877,19 +914,21 @@ function Get-AvailableModels {
             isActive     = ($f.Name -eq $config.activeModel)
             hasCustomConfig = [bool]$hasConfig
             architecture = [string]$hdr['general.architecture']
+            location     = $entry.Location
+            pinnedLocal  = $entry.Pinned
             settings     = $settings
         }
     }
-    return @{ models = $result; activeModel = $config.activeModel }
+    return @{ models = $result; activeModel = $config.activeModel
+        modelServer = @{ configured = $share.configured; online = $share.up; path = $share.networkDir; message = $share.message } }
 }
 
 
 function Apply-ModelSettings {
     param([string]$FileName)
 
-    $modelPath = Get-ModelPath $FileName
-    if (-not (Test-Path $modelPath)) {
-        return @{ success = $false; message = "Model file not found: $FileName" }
+    if (-not (Get-ModelPath $FileName)) {
+        return @{ success = $false; message = (Get-ModelNotFoundMessage -FileName $FileName) }
     }
 
     $config = Get-ModelsConfig
@@ -910,9 +949,8 @@ function Start-ModelTrial {
     # Loads a model with per-request setting overrides without writing models.json or changing activeModel.
     # Model Tuner uses this for every trial so the user's saved settings are never touched by a test.
     param([string]$FileName, $Overrides)
-    $modelPath = Get-ModelPath $FileName
-    if (-not (Test-Path $modelPath)) {
-        return @{ success = $false; message = "Model file not found: $FileName" }
+    if (-not (Get-ModelPath $FileName)) {
+        return @{ success = $false; message = (Get-ModelNotFoundMessage -FileName $FileName) }
     }
     $settings = Get-ModelSettingsFor -Config (Get-ModelsConfig) -FileName $FileName
     $overrideExtra = [string]$Overrides.extraArgs
@@ -960,7 +998,9 @@ function Save-ModelConfigOnly {
     try {
         $safeExtra = @(Get-LlamaSafeExtraArgs -ExtraArgs ([string]$merged['extraArgs']))
         [void](Get-LlamaProfileRamMinimumBytes -Value $merged['minimumAvailableRamGiB'])
-        [void](Resolve-LlamaDraftFile -DraftFile $merged['draftFile'] -ModelsDir (Split-Path -Parent (Get-ModelPath $FileName)))
+        $savedModelPath = Get-ModelPath $FileName
+        if ($merged['draftFile'] -and -not $savedModelPath) { throw (Get-ModelNotFoundMessage -FileName $FileName) }
+        if ($savedModelPath) { [void](Resolve-LlamaDraftFile -DraftFile $merged['draftFile'] -ModelsDir (Split-Path -Parent $savedModelPath)) }
     }
     catch { return @{ success = $false; message = $_.Exception.Message } }
     $merged['extraArgs'] = ($safeExtra | ForEach-Object { if ($_ -match '\s') { '"' + $_ + '"' } else { $_ } }) -join ' '
@@ -1331,6 +1371,10 @@ try {
                 }
                 '^/api/loras$' {
                     $body = (Get-LoraAdapters | ConvertTo-Json -Depth 10)
+                    break
+                }
+                '^/api/models/load-status$' {
+                    $body = (Get-ModelLoadStatus | ConvertTo-Json -Depth 5)
                     break
                 }
                 '^/api/models$' {
