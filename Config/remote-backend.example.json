@@ -1,0 +1,5 @@
+{
+  "name": "HP server",
+  "url": "http://192.168.1.241:10000",
+  "apiKeyEnv": "AI_REMOTE_LLM_API_KEY"
+}

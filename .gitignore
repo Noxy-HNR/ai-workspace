@@ -3,6 +3,8 @@
 *.env
 !*.env.example
 oura.env
+# Remote model backend settings can hold the HP's API key
+Config/remote-backend.json
 *.key
 *.pem
 
