@@ -349,7 +349,7 @@ function Start-LlamaNative {
     $stdErr = Join-Path $LogDir 'llama.stderr.log'
 
     try {
-        $p = Start-Process -FilePath $bin -ArgumentList $argList -WorkingDirectory (Split-Path $bin) -RedirectStandardOutput $stdOut -RedirectStandardError $stdErr -WindowStyle Hidden -PassThru
+        $p = Start-Process -FilePath $bin -ArgumentList (ConvertTo-LlamaArgumentLine $argList) -WorkingDirectory (Split-Path $bin) -RedirectStandardOutput $stdOut -RedirectStandardError $stdErr -WindowStyle Hidden -PassThru
         try { $p.PriorityClass = 'High' } catch {}
         Set-Content -Path $LlamaPidFile -Value $p.Id -Encoding UTF8
         # Tell cptr the new context right away (the model is still loading, so /props isn't up yet);
@@ -789,8 +789,6 @@ function Get-AvailableModels {
     foreach ($entry in (Get-ModelStorageFiles | Sort-Object Name)) {
         $f = $entry.File
         $hdr = Get-GgufHeader -File $f
-        # No architecture means an unreadable or half-copied file; list it once it reads cleanly.
-        if (-not $hdr['general.architecture']) { $script:GgufHeaderCache.Remove("$($f.FullName)|$($f.Length)|$($f.LastWriteTimeUtc.Ticks)"); continue }
         if ($hdr['general.type'] -eq 'adapter' -or $hdr['general.architecture'] -eq 'clip' -or $f.Name -match '^mmproj') { continue }
         $settings = Get-ModelSettingsFor -Config $config -FileName $f.Name
         $hasConfig = $config.models -and ($config.models.PSObject.Properties.Name -contains $f.Name)

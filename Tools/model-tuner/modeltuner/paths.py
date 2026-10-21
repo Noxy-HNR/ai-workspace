@@ -38,29 +38,71 @@ def _storage() -> dict:
     return data if isinstance(data, dict) else {}
 
 
+# A file on the share that changed in the last minute may still be arriving (same rule as the dashboard).
+SETTLE_SECONDS = 60
+
+
+def _pinned(cfg: dict, model_file: str) -> bool:
+    # Windows file names are case-insensitive, and so is the dashboard's pin check.
+    return model_file.casefold() in {str(p).casefold() for p in (cfg.get("pinnedLocal") or [])}
+
+
+def _network_dir(cfg: dict) -> Path | None:
+    net = str(cfg.get("networkDir") or "").rstrip("\\")
+    if not net:
+        return None
+    try:
+        return Path(net) if Path(net).is_dir() else None
+    except OSError:
+        return None
+
+
+def _settled(path: Path) -> bool:
+    import time
+    try:
+        return time.time() - path.stat().st_mtime >= SETTLE_SECONDS
+    except OSError:
+        return False
+
+
 def model_dirs(model_file: str = "") -> list[Path]:
     """Directories that may hold a model, in load order. Pinned models load from this PC, the rest from the
     model server (Config/model-storage.json), the same rule the dashboard uses. A share that can't be
     opened is skipped, so this PC's models still work."""
     cfg = _storage()
-    net = str(cfg.get("networkDir") or "").rstrip("\\")
-    if not net:
+    net = _network_dir(cfg)
+    if net is None:
         return [MODELS_DIR]
-    try:
-        reachable = Path(net).is_dir()
-    except OSError:
-        reachable = False
-    if not reachable:
-        return [MODELS_DIR]
-    pinned = cfg.get("pinnedLocal") or []
-    return [MODELS_DIR, Path(net)] if model_file in pinned else [Path(net), MODELS_DIR]
+    return [MODELS_DIR, net] if _pinned(cfg, model_file) else [net, MODELS_DIR]
 
 
 def resolve_model(model_file: str) -> Path:
+    cfg = _storage()
+    local = MODELS_DIR / model_file
+    if _pinned(cfg, model_file) and local.is_file():
+        return local                      # a pinned local model never touches the share
     for d in model_dirs(model_file):
-        if (d / model_file).is_file():
-            return d / model_file
-    return MODELS_DIR / model_file
+        p = d / model_file
+        if p.is_file() and (d == MODELS_DIR or _settled(p)):
+            return p
+    return local
+
+
+def model_files() -> dict[str, Path]:
+    """Every top-level .gguf on this PC and the model server, one per name (ignoring case), each the copy
+    resolve_model would load."""
+    names: dict[str, str] = {}
+    net = _network_dir(_storage())
+    for d in ([net] if net else []) + [MODELS_DIR]:
+        for p in d.glob("*.gguf"):
+            if d == MODELS_DIR or _settled(p):
+                names.setdefault(p.name.casefold(), p.name)
+    out = {}
+    for name in names.values():
+        p = resolve_model(name)
+        if p.is_file():
+            out[p.name] = p
+    return out
 
 
 def ensure_state_dirs() -> None:

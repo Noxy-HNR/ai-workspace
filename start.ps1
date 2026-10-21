@@ -245,7 +245,7 @@ if ($existingLlamaPid) {
     $stdOut = Join-Path $LogDir "llama.stdout.log"
     $stdErr = Join-Path $LogDir "llama.stderr.log"
 
-    $p = Start-Process -FilePath $LlamaBin -ArgumentList $argList -WorkingDirectory (Split-Path $LlamaBin) `
+    $p = Start-Process -FilePath $LlamaBin -ArgumentList (ConvertTo-LlamaArgumentLine $argList) -WorkingDirectory (Split-Path $LlamaBin) `
         -RedirectStandardOutput $stdOut -RedirectStandardError $stdErr -WindowStyle Hidden -PassThru
 
     OK "llama-server process launched (PID $($p.Id))."

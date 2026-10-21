@@ -39,8 +39,10 @@ file, or without `networkDir`, everything loads from `C:\AI\models` exactly as b
 | Only on this PC | Local copy | Local copy |
 
 New files on the share appear in the Models tab on its next refresh. A file the server changed in
-the last minute is skipped until it settles, so a model that is still being copied never shows up
-half-written. Each model card says where it loads from ("Model server", "This PC" or "This PC
+the last minute is skipped until it settles, so a model that is still being copied doesn't show up
+half-written. That is a time rule, not a completeness check: a copy that stalls for more than a minute
+looks finished. To be safe, copy to a temporary name (for example `model.gguf.part`) and rename it to
+`.gguf` when the copy completes. The HP dashboard's downloader only publishes a file once it is complete. Each model card says where it loads from ("Model server", "This PC" or "This PC
 (pinned)"). A bare `--mmproj` file name in a model's extra arguments is looked up next to the model
 first, so a server model takes its projector from the server.
 
@@ -56,8 +58,11 @@ Test-Path '\\192.168.1.241\ModelFiles\Models'   # should print True
 
 ## When the share can't be reached
 
-Before touching the share, the dashboard checks TCP port 445 on the server with a one-second limit
-(at most once every 15 seconds), so an unplugged server can't stall the dashboard. If the server is
+Before touching the share, the dashboard checks TCP port 445 on the server with a one-second limit,
+then checks that the folder opens with a three-second limit (at most once every 15 seconds), so an
+unplugged or hung server doesn't stall the dashboard. A pinned model on this PC loads without
+touching the share. If the server dies within those 15 seconds, one request can still wait on
+Windows' own SMB timeout before the next check marks the server offline. If the server is
 unreachable, the Models tab shows a yellow notice with the reason and lists this PC's models only.
 The messages and what they mean:
 

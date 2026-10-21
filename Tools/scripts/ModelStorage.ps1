@@ -56,10 +56,17 @@ function Get-ModelShareStatus {
         $task = $client.ConnectAsync($cfg.networkHost, 445)
         if (-not $task.Wait(1000) -or -not $client.Connected) {
             $status.message = "The model server $($cfg.networkHost) did not answer on the SMB port (TCP 445) within 1 second. Check that it is powered on and that this PC is on the home network."
-        } elseif (-not (Test-Path -LiteralPath $cfg.networkDir -PathType Container)) {
-            $status.message = "The model server $($cfg.networkHost) is up, but $($cfg.networkDir) can't be opened. Check the share and folder name, and that this Windows account has saved credentials for it (open the path in Explorer once, or use cmdkey)."
         } else {
-            $status.up = $true
+            # Samba can accept the TCP connection and still hang on file requests, so the folder check
+            # gets its own 3-second limit too.
+            $opened = Test-ModelShareFolder -Path $cfg.networkDir -TimeoutMs 3000
+            if ($null -eq $opened) {
+                $status.message = "The model server $($cfg.networkHost) accepted the SMB connection but did not open $($cfg.networkDir) within 3 seconds. Samba may be hung; on the server, check: systemctl status smbd."
+            } elseif (-not $opened) {
+                $status.message = "The model server $($cfg.networkHost) is up, but $($cfg.networkDir) can't be opened. Check the share and folder name, and that this Windows account has saved credentials for it (open the path in Explorer once, or use cmdkey)."
+            } else {
+                $status.up = $true
+            }
         }
     } catch {
         $inner = $_.Exception
@@ -75,6 +82,19 @@ function Get-ModelShareStatus {
     } finally { $client.Dispose() }
     $script:ModelShareProbe = @{ at = Get-Date; status = $status }
     return $status
+}
+
+function Test-ModelShareFolder {
+    # $true / $false for whether the folder opens, or $null if the check did not finish in time.
+    param([string]$Path, [int]$TimeoutMs)
+    $ps = [powershell]::Create().AddCommand('Test-Path').AddParameter('LiteralPath', $Path).AddParameter('PathType', 'Container')
+    $handle = $ps.BeginInvoke()
+    if (-not $handle.AsyncWaitHandle.WaitOne($TimeoutMs)) {
+        # Leave the stuck check to finish on its own thread; waiting for it is what we are avoiding.
+        [void]$ps.BeginStop($null, $null)
+        return $null
+    }
+    try { return [bool](@($ps.EndInvoke($handle))[0]) } finally { $ps.Dispose() }
 }
 
 function Test-ModelShareReachable {
@@ -106,7 +126,17 @@ function Resolve-ModelFilePath {
     # Full path of a bare model/companion file name, or $null. Never accepts a path.
     param([string]$FileName, [ValidateSet('model', 'companion', 'lora')][string]$Kind = 'model')
     if ([string]::IsNullOrWhiteSpace($FileName) -or $FileName -match '[\\/:]' -or $FileName -match '\.\.') { return $null }
-    $networkDir = (Get-ModelStorageConfig).networkDir
+    $cfg = Get-ModelStorageConfig
+    $networkDir = $cfg.networkDir
+    # A pinned model or companion that is on this PC resolves without touching the share at all.
+    if ($Kind -ne 'model' -or (Test-ModelPinnedLocal $FileName)) {
+        $localDirs = @($cfg.localDir)
+        if ($Kind -eq 'lora') { $localDirs += Join-Path $cfg.localDir 'lora' }
+        foreach ($dir in $localDirs) {
+            $p = Join-Path $dir $FileName
+            if (Test-Path -LiteralPath $p -PathType Leaf) { return $p }
+        }
+    }
     foreach ($dir in (Get-ModelSearchDirs -FileName $FileName -Kind $Kind)) {
         $p = Join-Path $dir $FileName
         if (-not (Test-Path -LiteralPath $p -PathType Leaf)) { continue }

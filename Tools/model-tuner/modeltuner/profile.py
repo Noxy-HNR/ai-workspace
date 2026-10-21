@@ -202,8 +202,7 @@ def build_profile(model_file: str, *, models_dir: Path | None = None,
 def list_models(models_dir: Path | None = None) -> list[str]:
     """Loadable model files on this PC and the model server (LoRA adapters excluded by their general.type)."""
     out = []
-    dirs = [models_dir] if models_dir else paths.model_dirs()
-    files = {p.name: p for d in reversed(dirs) for p in d.glob("*.gguf")}
+    files = {p.name: p for p in models_dir.glob("*.gguf")} if models_dir else paths.model_files()
     for p in (files[n] for n in sorted(files)):
         try:
             g = read_gguf(p, max_array_len=0)

@@ -62,6 +62,13 @@ try {
     $msg = Get-ModelNotFoundMessage -FileName 'server-only.gguf'
     Assert-Condition ($msg -match "can't be reached" -and $msg -match 'server-only\.gguf' -and $msg -match 'still load') "missing model while offline explains the server is down: $msg"
 
+    Set-Content -LiteralPath $configFile -Value '{"networkDir":"\\\\192.0.2.1\\ModelFiles\\Models","pinnedLocal":["local-only.gguf"]}' -Encoding UTF8
+    $script:ModelShareProbe = @{ at = [datetime]::MinValue; status = $null }
+    $timer = [Diagnostics.Stopwatch]::StartNew()
+    $p = Resolve-ModelFilePath -FileName 'local-only.gguf'
+    $timer.Stop()
+    Assert-Condition ($p -eq (Join-Path $ModelsDir 'local-only.gguf') -and $timer.Elapsed.TotalMilliseconds -lt 500 -and $null -eq $script:ModelShareProbe.status) 'a pinned local model resolves without probing the share'
+
     Set-Content -LiteralPath $configFile -Value '{"networkDir":"\\\\no-such-host.invalid\\ModelFiles"}' -Encoding UTF8
     $status = Get-ModelShareStatus -Refresh
     Assert-Condition (-not $status.up -and $status.message -match 'no-such-host\.invalid') "an unknown server name is reported by name: $($status.message)"
@@ -102,9 +109,23 @@ try {
     $settings.extraArgs = ''
     $argList = @(Build-LlamaArgs -ModelPath (Join-Path $serverDir 'both.gguf') -Settings $settings)
     Assert-Condition (($argList -join ' ') -match '--load-mode none' -and ($argList -join ' ') -match '--cache-ram 0') 'a model with no saved profile still gets the RAM-safety flags'
-    $settings.extraArgs = '--cache-ram=2048'
+    $settings.extraArgs = '--load-mode mmap --cache-ram=8192 -lm=mmap --jinja'
     $argList = @(Build-LlamaArgs -ModelPath (Join-Path $serverDir 'both.gguf') -Settings $settings)
-    Assert-Condition (@($argList | Where-Object { $_ -like '--cache-ram*' }).Count -eq 1 -and ($argList -join ' ') -match '--load-mode none') 'a saved flag is kept and only the missing one is added'
+    $line = $argList -join ' '
+    Assert-Condition ($line -notmatch 'mmap|8192' -and @($argList | Where-Object { $_ -in '--load-mode', '--cache-ram' }).Count -eq 2 -and $line -match '--load-mode none --cache-ram 0') "unsafe saved RAM flags are replaced by the safe ones: $line"
+    $settings.extraArgs = '--mmproj=mmproj-a.gguf'
+    $argList = @(Build-LlamaArgs -ModelPath (Join-Path $serverDir 'both.gguf') -Settings $settings)
+    Assert-Condition ($argList[[array]::IndexOf($argList, '--mmproj') + 1] -eq (Join-Path $serverDir 'mmproj-a.gguf')) 'the --mmproj=name form is resolved too'
+    $settings.extraArgs = '--mmproj=nowhere.gguf'
+    $threw = $false
+    try { [void](Build-LlamaArgs -ModelPath (Join-Path $serverDir 'both.gguf') -Settings $settings) } catch { $threw = $_.Exception.Message -match 'nowhere\.gguf' }
+    Assert-Condition $threw 'a missing --mmproj=name projector stops the load'
+    $settings.extraArgs = '--jinja --mmproj'
+    $threw = $false
+    try { [void](Build-LlamaArgs -ModelPath (Join-Path $serverDir 'both.gguf') -Settings $settings) } catch { $threw = $_.Exception.Message -match 'needs a projector' }
+    Assert-Condition $threw 'a --mmproj with no value stops the load'
+    $line = ConvertTo-LlamaArgumentLine @('--model', '\\server\Model Files\m.gguf', '-ot', 'blk\.(0|1)\.ffn=CPU', '--alias', 'say "hi"', 'C:\dir with space\')
+    Assert-Condition ($line -eq '--model "\\server\Model Files\m.gguf" -ot blk\.(0|1)\.ffn=CPU --alias "say \"hi\"" "C:\dir with space\\"') "arguments with spaces and quotes are quoted for the child process: $line"
 
     Set-Content -LiteralPath (Join-Path $serverDir 'still-copying.gguf') -Value 'x'
     Set-Content -LiteralPath (Join-Path $ModelsDir 'still-copying.gguf') -Value 'x'
