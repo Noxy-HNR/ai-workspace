@@ -14,6 +14,8 @@ foreach($node in $ast.FindAll({param($n)$n -is [Management.Automation.Language.F
 }
 $optional=$ast.Find({param($n)$n -is [Management.Automation.Language.AssignmentStatementAst] -and $n.Left.Extent.Text -eq '$OptionalModelKeys'},$false)
 . ([scriptblock]::Create($optional.Extent.Text))
+$reader=$ast.Find({param($n)$n -is [Management.Automation.Language.AssignmentStatementAst] -and $n.Left.Extent.Text -eq '$GgufHeaderReader'},$false)
+. ([scriptblock]::Create($reader.Extent.Text))
 $scratchRoot=[IO.Path]::GetFullPath((Join-Path $stackRoot 'Scratch'))
 $Root=Join-Path $scratchRoot ('draft-safety-'+[guid]::NewGuid().ToString('N'))
 $ModelsDir=Join-Path $Root 'models';$drafts=Join-Path $ModelsDir 'drafts'

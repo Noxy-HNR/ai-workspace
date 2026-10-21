@@ -14,7 +14,7 @@ $work = Join-Path ([IO.Path]::GetTempPath()) ("model-storage-test-" + [guid]::Ne
 $fakeRoot = Join-Path $work 'AI'
 $scripts = Join-Path (Join-Path $fakeRoot 'Tools') 'scripts'
 New-Item -ItemType Directory -Force -Path $scripts, (Join-Path $fakeRoot 'Config') | Out-Null
-foreach ($name in @('ModelStorage.ps1', 'Build-LlamaArgs.ps1')) {
+foreach ($name in @('ModelStorage.ps1', 'LlamaSafety.ps1', 'Build-LlamaArgs.ps1')) {
     Copy-Item -LiteralPath (Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) 'scripts') $name) -Destination (Join-Path $scripts $name)
 }
 $configFile = Join-Path $fakeRoot 'Config\model-storage.json'

@@ -88,6 +88,8 @@ foreach ($node in $ast.FindAll({ param($n) $n -is [Management.Automation.Languag
 }
 $optionalKeysNode = $ast.Find({ param($n) $n -is [Management.Automation.Language.AssignmentStatementAst] -and $n.Left.Extent.Text -eq '$OptionalModelKeys' }, $false)
 . ([scriptblock]::Create($optionalKeysNode.Extent.Text))
+$headerReaderNode = $ast.Find({ param($n) $n -is [Management.Automation.Language.AssignmentStatementAst] -and $n.Left.Extent.Text -eq '$GgufHeaderReader' }, $false)
+. ([scriptblock]::Create($headerReaderNode.Extent.Text))
 $scratchRoot = [IO.Path]::GetFullPath((Join-Path $stackRoot 'Scratch'))
 $Root = Join-Path $scratchRoot ('llama-safety-' + [guid]::NewGuid().ToString('N'))
 $ModelsDir = Join-Path $Root 'models'
