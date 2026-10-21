@@ -160,9 +160,9 @@ def analyse_template(template: str) -> tuple[bool, bool, bool]:
     return tools, thinking, effort
 
 
-def build_profile(model_file: str, *, models_dir: Path = paths.MODELS_DIR,
+def build_profile(model_file: str, *, models_dir: Path | None = None,
                   models_json: Path = paths.MODELS_JSON, gguf: GGUFFile | None = None) -> ModelProfile:
-    path = models_dir / model_file
+    path = models_dir / model_file if models_dir else paths.resolve_model(model_file)
     g = gguf or read_gguf(path)
     arch = g.architecture or "unknown"
     n_layer = _int(g.arch_get("block_count"))
@@ -199,10 +199,12 @@ def build_profile(model_file: str, *, models_dir: Path = paths.MODELS_DIR,
     )
 
 
-def list_models(models_dir: Path = paths.MODELS_DIR) -> list[str]:
-    """Loadable model files (LoRA adapters excluded by their general.type)."""
+def list_models(models_dir: Path | None = None) -> list[str]:
+    """Loadable model files on this PC and the model server (LoRA adapters excluded by their general.type)."""
     out = []
-    for p in sorted(models_dir.glob("*.gguf")):
+    dirs = [models_dir] if models_dir else paths.model_dirs()
+    files = {p.name: p for d in reversed(dirs) for p in d.glob("*.gguf")}
+    for p in (files[n] for n in sorted(files)):
         try:
             g = read_gguf(p, max_array_len=0)
         except Exception:

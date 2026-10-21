@@ -218,9 +218,13 @@ if ([string]::IsNullOrWhiteSpace($activeModel)) {
     Die "No active model set in Config\models.json. Load a model from the dashboard first."
 }
 
-$modelPath = Join-Path $ModelsDir $activeModel
-if (-not (Test-Path $modelPath)) {
-    Die "Active model file not found: $modelPath"
+# Pinned models load from this PC, the rest straight from the model server (Config\model-storage.json).
+. (Join-Path $Root "Tools\scripts\Build-LlamaArgs.ps1")
+$share = Get-ModelShareStatus
+if ($share.configured -and -not $share.up) { Warn "Model server unavailable, using this PC's models only. $($share.message)" }
+$modelPath = Resolve-ModelFilePath -FileName $activeModel -Kind model
+if (-not $modelPath) {
+    Die (Get-ModelNotFoundMessage -FileName $activeModel)
 }
 
 $settings = $modelsConfig.models.$activeModel
@@ -236,7 +240,6 @@ $existingLlamaPid = Get-PortPid 10000
 if ($existingLlamaPid) {
     OK "llama-server is already running (PID $existingLlamaPid)."
 } else {
-    . (Join-Path $Root "Tools\scripts\Build-LlamaArgs.ps1")
     $argList = Build-LlamaArgs -ModelPath $modelPath -Settings $settings
 
     $stdOut = Join-Path $LogDir "llama.stdout.log"
