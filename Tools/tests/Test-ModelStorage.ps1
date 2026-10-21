@@ -99,8 +99,18 @@ try {
     $threw = $false
     try { [void](Build-LlamaArgs -ModelPath (Join-Path $serverDir 'both.gguf') -Settings $settings) } catch { $threw = $_.Exception.Message -match 'missing\.gguf' }
     Assert-Condition $threw 'a missing projector stops the load with its name'
+    $settings.extraArgs = ''
+    $argList = @(Build-LlamaArgs -ModelPath (Join-Path $serverDir 'both.gguf') -Settings $settings)
+    Assert-Condition (($argList -join ' ') -match '--load-mode none' -and ($argList -join ' ') -match '--cache-ram 0') 'a model with no saved profile still gets the RAM-safety flags'
+    $settings.extraArgs = '--cache-ram=2048'
+    $argList = @(Build-LlamaArgs -ModelPath (Join-Path $serverDir 'both.gguf') -Settings $settings)
+    Assert-Condition (@($argList | Where-Object { $_ -like '--cache-ram*' }).Count -eq 1 -and ($argList -join ' ') -match '--load-mode none') 'a saved flag is kept and only the missing one is added'
 
     Set-Content -LiteralPath (Join-Path $serverDir 'still-copying.gguf') -Value 'x'
+    Set-Content -LiteralPath (Join-Path $ModelsDir 'still-copying.gguf') -Value 'x'
+    Assert-Condition ((Resolve-ModelFilePath -FileName 'still-copying.gguf') -eq (Join-Path $ModelsDir 'still-copying.gguf')) 'a server copy still being written is skipped in favour of the local copy'
+    Remove-Item -LiteralPath (Join-Path $ModelsDir 'still-copying.gguf')
+    Assert-Condition ($null -eq (Resolve-ModelFilePath -FileName 'still-copying.gguf')) 'a server copy still being written does not load'
     $files = @(Get-ModelStorageFiles)
     $byName = @{}; foreach ($f in $files) { $byName[$f.Name] = $f }
     Assert-Condition ($byName['both.gguf'].Location -eq 'network' -and $byName['both.gguf'].HasLocal) 'the listing shows one entry per name, from the copy that would load'

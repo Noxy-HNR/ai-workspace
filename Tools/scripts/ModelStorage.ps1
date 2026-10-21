@@ -106,11 +106,21 @@ function Resolve-ModelFilePath {
     # Full path of a bare model/companion file name, or $null. Never accepts a path.
     param([string]$FileName, [ValidateSet('model', 'companion', 'lora')][string]$Kind = 'model')
     if ([string]::IsNullOrWhiteSpace($FileName) -or $FileName -match '[\\/:]' -or $FileName -match '\.\.') { return $null }
+    $networkDir = (Get-ModelStorageConfig).networkDir
     foreach ($dir in (Get-ModelSearchDirs -FileName $FileName -Kind $Kind)) {
         $p = Join-Path $dir $FileName
-        if (Test-Path -LiteralPath $p -PathType Leaf) { return $p }
+        if (-not (Test-Path -LiteralPath $p -PathType Leaf)) { continue }
+        # Same rule as the listing: a server file still being copied is skipped, so a partial GGUF never loads.
+        if ($networkDir -and $dir.StartsWith($networkDir, [StringComparison]::OrdinalIgnoreCase) -and -not (Test-ModelFileSettled (Get-Item -LiteralPath $p))) { continue }
+        return $p
     }
     return $null
+}
+
+function Test-ModelFileSettled {
+    # A file on the share that changed in the last minute may still be arriving.
+    param([System.IO.FileInfo]$File)
+    return ((Get-Date) - $File.LastWriteTime).TotalSeconds -ge 60
 }
 
 function Get-ModelNotFoundMessage {
@@ -134,7 +144,7 @@ function Get-ModelStorageFiles {
     foreach ($src in $sources) {
         foreach ($f in (Get-ChildItem -LiteralPath $src.dir -Filter '*.gguf' -File -ErrorAction SilentlyContinue)) {
             # A file still being copied to the share keeps changing; list it once it has settled.
-            if ($src.location -eq 'network' -and ((Get-Date) - $f.LastWriteTime).TotalSeconds -lt 60) { continue }
+            if ($src.location -eq 'network' -and -not (Test-ModelFileSettled $f)) { continue }
             if (-not $byName.Contains($f.Name)) { $byName[$f.Name] = @{ local = $null; network = $null } }
             $byName[$f.Name][$src.location] = $f
         }

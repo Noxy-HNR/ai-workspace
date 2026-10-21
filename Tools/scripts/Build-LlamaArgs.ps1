@@ -62,5 +62,10 @@ function Build-LlamaArgs {
         $extra = @($tokenMatches | ForEach-Object { $_.Value.Trim('"').Trim("'") })
         $argList += @(Resolve-LlamaProjectorArgs -ArgList $extra -ModelDir (Split-Path -Parent $ModelPath))
     }
+    # RAM safety (AGENTS.md): memory-mapped loading and the default prompt cache once exhausted RAM. A model
+    # with no saved profile yet (e.g. one just added to the model server) gets these too.
+    $flags = @($argList | ForEach-Object { ([string]$_ -split '=', 2)[0] })
+    if (-not ($flags | Where-Object { $_ -in @('--load-mode', '-lm') })) { $argList += @('--load-mode', 'none') }
+    if (-not ($flags | Where-Object { $_ -in @('--cache-ram', '-cram') })) { $argList += @('--cache-ram', '0') }
     return $argList
 }
