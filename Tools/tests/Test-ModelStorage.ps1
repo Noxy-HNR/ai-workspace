@@ -73,6 +73,14 @@ try {
     $status = Get-ModelShareStatus -Refresh
     Assert-Condition (-not $status.up -and $status.message -match 'no-such-host\.invalid') "an unknown server name is reported by name: $($status.message)"
 
+    # --- a share that stops answering file requests ---
+    $timer = [Diagnostics.Stopwatch]::StartNew()
+    $r = Invoke-ModelShareIO -Script { Start-Sleep -Seconds 10 } -TimeoutMs 500
+    $timer.Stop()
+    Assert-Condition (-not $r.done -and $timer.Elapsed.TotalSeconds -lt 3) "a hung share operation is abandoned at its deadline ($([math]::Round($timer.Elapsed.TotalSeconds,1)) s)"
+    $status = Get-ModelShareStatus
+    Assert-Condition (-not $status.up -and $status.message -match 'stopped answering') "after a hang the share counts as offline until the next probe: $($status.message)"
+
     # --- load order with the server online (the share is a temp folder here) ---
     function Get-ModelStorageConfig { [ordered]@{ localDir = $ModelsDir; networkDir = $serverDir; networkHost = 'test'; pinnedLocal = @('pinned.gguf'); error = '' } }
     function Get-ModelShareStatus { param([switch]$Refresh) @{ configured = $true; up = $true; networkDir = $serverDir; message = '' } }
@@ -95,6 +103,12 @@ try {
     # A bare --mmproj name follows its model: next to a server model first, then this PC, then the server.
     Set-Content -LiteralPath (Join-Path $serverDir 'mmproj-a.gguf') -Value 'x'
     Set-Content -LiteralPath (Join-Path $ModelsDir 'mmproj-b.gguf') -Value 'x'
+    $settings0 = [pscustomobject]@{ contextSize = 4096; gpuLayers = 99; parallel = 1; batchSize = 512; ubatchSize = 256; threads = 4
+        cacheTypeK = 'f16'; cacheTypeV = 'f16'; flashAttn = $true; jinja = $true; extraArgs = '--mmproj mmproj-a.gguf' }
+    $threw = $false
+    try { [void](Build-LlamaArgs -ModelPath (Join-Path $serverDir 'both.gguf') -Settings $settings0) } catch { $threw = $_.Exception.Message -match 'mmproj-a' }
+    Assert-Condition $threw 'a projector still being copied to the server is not used'
+    (Get-Item -LiteralPath (Join-Path $serverDir 'mmproj-a.gguf')).LastWriteTime = (Get-Date).AddHours(-1)
     $settings = [pscustomobject]@{ contextSize = 4096; gpuLayers = 99; parallel = 1; batchSize = 512; ubatchSize = 256; threads = 4
         cacheTypeK = 'f16'; cacheTypeV = 'f16'; flashAttn = $true; jinja = $true; extraArgs = '--mmproj mmproj-a.gguf' }
     $argList = @(Build-LlamaArgs -ModelPath (Join-Path $serverDir 'both.gguf') -Settings $settings)

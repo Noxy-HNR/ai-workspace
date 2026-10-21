@@ -84,17 +84,58 @@ function Get-ModelShareStatus {
     return $status
 }
 
+function Invoke-ModelShareIO {
+    # Runs one file operation on the share with a hard deadline, so a server that stops answering can't
+    # hold the dashboard's request thread for Windows' SMB timeout. Returns @{ done; value }. On a timeout
+    # the share is marked offline until the next probe, so later calls fall back to this PC at once.
+    param([scriptblock]$Script, [object[]]$Arguments = @(), [int]$TimeoutMs = 3000)
+    $ps = [powershell]::Create().AddScript($Script.ToString())
+    foreach ($a in $Arguments) { [void]$ps.AddArgument($a) }
+    $handle = $ps.BeginInvoke()
+    if (-not $handle.AsyncWaitHandle.WaitOne($TimeoutMs)) {
+        # Leave the stuck operation to finish on its own thread; waiting for it is what we are avoiding.
+        [void]$ps.BeginStop($null, $null)
+        $cfg = Get-ModelStorageConfig
+        $script:ModelShareProbe = @{ at = Get-Date; status = @{ configured = $true; up = $false; networkDir = $cfg.networkDir
+            message = "The model server $($cfg.networkHost) stopped answering file requests (nothing within $([int]($TimeoutMs / 1000)) seconds). Samba may be hung; on the server, check: systemctl status smbd." } }
+        return @{ done = $false; value = $null }
+    }
+    try { return @{ done = $true; value = @($ps.EndInvoke($handle)) } }
+    catch { return @{ done = $true; value = @() } }
+    finally { $ps.Dispose() }
+}
+
 function Test-ModelShareFolder {
     # $true / $false for whether the folder opens, or $null if the check did not finish in time.
     param([string]$Path, [int]$TimeoutMs)
-    $ps = [powershell]::Create().AddCommand('Test-Path').AddParameter('LiteralPath', $Path).AddParameter('PathType', 'Container')
-    $handle = $ps.BeginInvoke()
-    if (-not $handle.AsyncWaitHandle.WaitOne($TimeoutMs)) {
-        # Leave the stuck check to finish on its own thread; waiting for it is what we are avoiding.
-        [void]$ps.BeginStop($null, $null)
-        return $null
-    }
-    try { return [bool](@($ps.EndInvoke($handle))[0]) } finally { $ps.Dispose() }
+    $r = Invoke-ModelShareIO -Script { param($p) Test-Path -LiteralPath $p -PathType Container } -Arguments @($Path) -TimeoutMs $TimeoutMs
+    if (-not $r.done) { return $null }
+    return [bool]@($r.value)[0]
+}
+
+function Test-ModelNetworkPath {
+    param([string]$Path)
+    $net = (Get-ModelStorageConfig).networkDir
+    return ($Path.StartsWith('\\') -or ($net -and $Path.StartsWith($net, [StringComparison]::OrdinalIgnoreCase)))
+}
+
+function Test-ModelFileUsable {
+    # Whether a file exists and can be loaded now: on this PC it only has to exist; on the share it must
+    # answer within the deadline and have settled (not changed in the last minute).
+    param([string]$Path)
+    if (-not (Test-ModelNetworkPath $Path)) { return (Test-Path -LiteralPath $Path -PathType Leaf) }
+    $r = Invoke-ModelShareIO -Script { param($p) if (Test-Path -LiteralPath $p -PathType Leaf) { (Get-Item -LiteralPath $p).LastWriteTime } } -Arguments @($Path)
+    if (-not $r.done -or @($r.value).Count -eq 0) { return $false }
+    return ((Get-Date) - [datetime]@($r.value)[0]).TotalSeconds -ge 60
+}
+
+function Get-ModelDirGguf {
+    # Top-level .gguf files of a folder; a folder on the share is listed with a deadline.
+    param([string]$Dir)
+    if (-not (Test-ModelNetworkPath $Dir)) { return @(Get-ChildItem -LiteralPath $Dir -Filter '*.gguf' -File -ErrorAction SilentlyContinue) }
+    $r = Invoke-ModelShareIO -Script { param($d) Get-ChildItem -LiteralPath $d -Filter '*.gguf' -File -ErrorAction SilentlyContinue } -Arguments @($Dir) -TimeoutMs 5000
+    if (-not $r.done) { return @() }
+    return @($r.value | Where-Object { $_ -is [System.IO.FileInfo] } | ForEach-Object { [System.IO.FileInfo]$_ })
 }
 
 function Test-ModelShareReachable {
@@ -127,7 +168,6 @@ function Resolve-ModelFilePath {
     param([string]$FileName, [ValidateSet('model', 'companion', 'lora')][string]$Kind = 'model')
     if ([string]::IsNullOrWhiteSpace($FileName) -or $FileName -match '[\\/:]' -or $FileName -match '\.\.') { return $null }
     $cfg = Get-ModelStorageConfig
-    $networkDir = $cfg.networkDir
     # A pinned model or companion that is on this PC resolves without touching the share at all.
     if ($Kind -ne 'model' -or (Test-ModelPinnedLocal $FileName)) {
         $localDirs = @($cfg.localDir)
@@ -139,10 +179,8 @@ function Resolve-ModelFilePath {
     }
     foreach ($dir in (Get-ModelSearchDirs -FileName $FileName -Kind $Kind)) {
         $p = Join-Path $dir $FileName
-        if (-not (Test-Path -LiteralPath $p -PathType Leaf)) { continue }
         # Same rule as the listing: a server file still being copied is skipped, so a partial GGUF never loads.
-        if ($networkDir -and $dir.StartsWith($networkDir, [StringComparison]::OrdinalIgnoreCase) -and -not (Test-ModelFileSettled (Get-Item -LiteralPath $p))) { continue }
-        return $p
+        if (Test-ModelFileUsable $p) { return $p }
     }
     return $null
 }
@@ -172,7 +210,7 @@ function Get-ModelStorageFiles {
     $sources = @(@{ dir = $cfg.localDir; location = 'local' })
     if (Test-ModelShareReachable) { $sources += @{ dir = $cfg.networkDir; location = 'network' } }
     foreach ($src in $sources) {
-        foreach ($f in (Get-ChildItem -LiteralPath $src.dir -Filter '*.gguf' -File -ErrorAction SilentlyContinue)) {
+        foreach ($f in (Get-ModelDirGguf -Dir $src.dir)) {
             # A file still being copied to the share keeps changing; list it once it has settled.
             if ($src.location -eq 'network' -and -not (Test-ModelFileSettled $f)) { continue }
             if (-not $byName.Contains($f.Name)) { $byName[$f.Name] = @{ local = $null; network = $null } }

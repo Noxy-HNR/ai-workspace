@@ -21,10 +21,11 @@ function Resolve-LlamaProjectorArgs {
         elseif ($i + 1 -lt $ArgList.Count) { $i++; $value = [string]$ArgList[$i] }
         else { $value = '' }
         if ([string]::IsNullOrWhiteSpace($value)) { throw "$flag needs a projector file name." }
-        if ([IO.Path]::IsPathRooted($value) -and (Test-Path -LiteralPath $value -PathType Leaf)) { $out += @($flag, $value); continue }
+        # Server copies must have settled, like models, so a projector still being copied never loads.
+        if ([IO.Path]::IsPathRooted($value) -and (Test-ModelFileUsable $value)) { $out += @($flag, $value); continue }
         $leaf = Split-Path -Leaf $value
         $resolved = $null
-        if ($ModelDir -and (Test-Path -LiteralPath (Join-Path $ModelDir $leaf) -PathType Leaf)) { $resolved = Join-Path $ModelDir $leaf }
+        if ($ModelDir -and (Test-ModelFileUsable (Join-Path $ModelDir $leaf))) { $resolved = Join-Path $ModelDir $leaf }
         if (-not $resolved) { $resolved = Resolve-ModelFilePath -FileName $leaf -Kind companion }
         if (-not $resolved) { throw "Projector not found next to the model, on this PC, or on the model server: $leaf" }
         $out += @($flag, $resolved)

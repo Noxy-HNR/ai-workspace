@@ -23,6 +23,8 @@ def _setup(tmp_path, monkeypatch, *, network=True, pinned=()):
                                "pinnedLocal": list(pinned)}), encoding="utf-8")
     monkeypatch.setattr(paths, "MODELS_DIR", local)
     monkeypatch.setattr(paths, "MODEL_STORAGE_JSON", cfg)
+    # Real configs name a UNC share; here a temp folder stands in for the reachable share.
+    monkeypatch.setattr(paths, "_network_dir", lambda c: server if network and c.get("networkDir") else None)
     return local, server
 
 
@@ -89,3 +91,9 @@ def test_server_copy_still_being_written_is_skipped(tmp_path, monkeypatch):
     _write(server / "new.gguf", settled=False)
     assert paths.resolve_model("m.gguf") == local / "m.gguf"
     assert sorted(paths.model_files()) == ["m.gguf"]
+
+
+def test_only_a_unc_share_is_accepted(tmp_path):
+    assert paths._network_dir({"networkDir": str(tmp_path)}) is None          # a plain or mapped-drive folder
+    assert paths._network_dir({"networkDir": "M:\\Models"}) is None
+    assert paths._network_dir({"networkDir": "\\\\no-share-here"}) is None   # host without a share

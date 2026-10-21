@@ -731,10 +731,25 @@ function Get-GgufHeader {
     param([System.IO.FileInfo]$File)
     $key = "$($File.FullName)|$($File.Length)|$($File.LastWriteTimeUtc.Ticks)"
     if ($script:GgufHeaderCache.ContainsKey($key)) { return $script:GgufHeaderCache[$key] }
+    if (Test-ModelNetworkPath $File.FullName) {
+        # A file on the model server is read with a deadline; a timeout is not remembered, so it is retried.
+        $r = Invoke-ModelShareIO -Script $GgufHeaderReader -Arguments @($File.FullName)
+        if (-not $r.done) { return @{} }
+        $meta = @($r.value)[0]
+        $meta = if ($meta -is [hashtable]) { [hashtable]$meta } else { @{} }
+    } else {
+        $meta = & $GgufHeaderReader $File.FullName
+    }
+    $script:GgufHeaderCache[$key] = $meta
+    return $meta
+}
+
+$GgufHeaderReader = {
+    param([string]$Path)
     $meta = @{}
     $fs = $null
     try {
-        $fs = [System.IO.File]::OpenRead($File.FullName)
+        $fs = [System.IO.File]::OpenRead($Path)
         $br = New-Object System.IO.BinaryReader($fs)
         if ([System.Text.Encoding]::ASCII.GetString($br.ReadBytes(4)) -eq 'GGUF') {
             [void]$br.ReadUInt32(); [void]$br.ReadUInt64(); $kvCount = $br.ReadUInt64()
@@ -749,7 +764,6 @@ function Get-GgufHeader {
             }
         }
     } catch { } finally { if ($fs) { $fs.Dispose() } }
-    $script:GgufHeaderCache[$key] = $meta
     return $meta
 }
 
@@ -764,7 +778,7 @@ function Get-LoraAdapters {
     $result = @()
     $seen = @{}
     foreach ($dir in (Get-ModelStorageDirs -Kind lora)) {
-        foreach ($f in (Get-ChildItem -LiteralPath $dir -Filter '*.gguf' -File -ErrorAction SilentlyContinue | Sort-Object Name)) {
+        foreach ($f in (Get-ModelDirGguf -Dir $dir | Sort-Object Name)) {
             if ($seen.ContainsKey($f.Name)) { continue }
             $hdr = Get-GgufHeader -File $f
             if ($hdr['general.type'] -ne 'adapter') { continue }

@@ -60,9 +60,11 @@ Test-Path '\\192.168.1.241\ModelFiles\Models'   # should print True
 
 Before touching the share, the dashboard checks TCP port 445 on the server with a one-second limit,
 then checks that the folder opens with a three-second limit (at most once every 15 seconds), so an
-unplugged or hung server doesn't stall the dashboard. A pinned model on this PC loads without
-touching the share. If the server dies within those 15 seconds, one request can still wait on
-Windows' own SMB timeout before the next check marks the server offline. If the server is
+unplugged server doesn't stall the dashboard. Every later file operation on the share (checking a
+file, listing the folder, reading a model's header) also runs with a deadline of a few seconds; if
+one misses it, the server is marked offline until the next check and the dashboard carries on with
+this PC's models. A pinned model on this PC loads without touching the share. Model Tuner checks
+the share folder with the same 3-second limit, but its later reads have no deadline. If the server is
 unreachable, the Models tab shows a yellow notice with the reason and lists this PC's models only.
 The messages and what they mean:
 

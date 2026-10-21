@@ -220,9 +220,12 @@ if ([string]::IsNullOrWhiteSpace($activeModel)) {
 
 # Pinned models load from this PC, the rest straight from the model server (Config\model-storage.json).
 . (Join-Path $Root "Tools\scripts\Build-LlamaArgs.ps1")
-$share = Get-ModelShareStatus
-if ($share.configured -and -not $share.up) { Warn "Model server unavailable, using this PC's models only. $($share.message)" }
 $modelPath = Resolve-ModelFilePath -FileName $activeModel -Kind model
+if (-not $modelPath -or -not (Test-ModelPinnedLocal $activeModel)) {
+    # Only worth a warning when the share was consulted: a pinned local model never touches it.
+    $share = Get-ModelShareStatus
+    if ($share.configured -and -not $share.up) { Warn "Model server unavailable, using this PC's models only. $($share.message)" }
+}
 if (-not $modelPath) {
     Die (Get-ModelNotFoundMessage -FileName $activeModel)
 }

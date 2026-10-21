@@ -48,13 +48,26 @@ def _pinned(cfg: dict, model_file: str) -> bool:
 
 
 def _network_dir(cfg: dict) -> Path | None:
+    """The configured share folder if it opens within 3 s, else None (use this PC's models only).
+
+    Only a UNC path is accepted, as in the dashboard: a mapped drive letter belongs to one logon session."""
+    import re
+    import threading
     net = str(cfg.get("networkDir") or "").rstrip("\\")
-    if not net:
+    if not re.match(r"^\\\\[^\\]+\\[^\\]+", net):
         return None
-    try:
-        return Path(net) if Path(net).is_dir() else None
-    except OSError:
-        return None
+    found: list[bool] = []
+
+    def probe() -> None:
+        try:
+            found.append(Path(net).is_dir())
+        except OSError:
+            found.append(False)
+
+    worker = threading.Thread(target=probe, daemon=True)   # a hung share must not hold the tuner
+    worker.start()
+    worker.join(3)
+    return Path(net) if found and found[0] else None
 
 
 def _settled(path: Path) -> bool:
