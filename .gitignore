@@ -29,6 +29,8 @@ Downloads/
 Logs/
 Workspace/Screenshots/
 Config/llama-native.pid
+# Per-PC model server location; copy Config/model-storage.example.json
+Config/model-storage.json
 
 # Completed improvement workspace artifacts
 Workspace/project-improvements/original/
