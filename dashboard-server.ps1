@@ -352,9 +352,17 @@ function Get-LlamaModelAdmission {
 }
 
 function Get-ModelPreflight {
-    param([string]$FileName)
+    # $Overrides: the same per-request settings a trial load takes (e.g. a caller that loads the
+    # model without its saved LoRA), so the check matches what will actually be launched.
+    param([string]$FileName, $Overrides)
     try {
         $settings = Get-ModelSettingsFor -Config (Get-ModelsConfig) -FileName $FileName
+        if ($Overrides) {
+            $allowed = @((Get-ModelDefaults).Keys) + $OptionalModelKeys
+            foreach ($p in $Overrides.PSObject.Properties) {
+                if ($allowed -contains $p.Name -and $p.Name -ne 'extraArgs') { $settings[$p.Name] = $p.Value }
+            }
+        }
         $bin = Resolve-LlamaServerBinary -Root $Root -DefaultBinary $LlamaBin -Settings $settings
         [void]@(Build-LlamaArgs -ModelPath (Get-ModelPath $FileName) -Settings $settings)
         $admission = Get-LlamaModelAdmission -FileName $FileName -Settings $settings
@@ -1399,7 +1407,7 @@ try {
                     $reader = New-Object IO.StreamReader($request.InputStream)
                     $obj = $reader.ReadToEnd() | ConvertFrom-Json
                     $reader.Close()
-                    $body = (Get-ModelPreflight -FileName ([string]$obj.filename) | ConvertTo-Json -Depth 10)
+                    $body = (Get-ModelPreflight -FileName ([string]$obj.filename) -Overrides $obj.settings | ConvertTo-Json -Depth 10)
                     break
                 }
                 '^/api/models/load$' {
