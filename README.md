@@ -45,7 +45,7 @@ dashboard-server.ps1, dashboard.html   Local AI dashboard (port 9090)
 start.ps1, stop.ps1, update.ps1        Start, stop, and update the stack
 setup.ps1, model-*.ps1                 Setup and model management
 llama-proxy.py                         Logging proxy (port 10001) in front of llama-server
-Config/                                Model settings (models.json, model-storage.json)
+Config/                                Model settings (models.json, model-storage.json), remote backend example
 docs/                                  Guides (loading models from the home server)
 Tools/
   model-tuner/                         Settings search and benchmark (Python)
@@ -102,6 +102,30 @@ process and starts a new one with that model's saved settings.
 
 The dashboard does not modify your `.env`, model files, or cptr installation.
 
+## Remote model backend (HP server)
+
+The dashboard can also use the llama-server on the HP home server (see `hp/llm/` in
+homelab-hp). Its Services tab shows both backends with their health and model, and the
+choice of **This PC** or **HP server** applies to Chat and Benchmark. The choice is remembered
+in the browser.
+
+Set the address and API key with environment variables, then restart the dashboard server:
+
+```powershell
+setx AI_REMOTE_LLM_URL "http://192.168.1.241:10000"   # or the HP's Tailscale name
+setx AI_REMOTE_LLM_API_KEY "<the key from the HP's llama-server settings>"
+```
+
+Or copy `Config\remote-backend.example.json` to `Config\remote-backend.json` (gitignored)
+and fill in `url`, plus either `apiKey` or `apiKeyEnv`, the name of a variable holding the key.
+Environment variables win over the file.
+
+The browser never sees the key. The dashboard checks the HP's `/health` and `/v1/models`
+itself and relays chat requests through `POST /api/remote/v1/chat/completions`, off its main
+request loop, so a slow CPU reply doesn't stall the rest of the dashboard. When the HP is
+offline, still loading, or rejects the key, the panel says so and chat replies with the reason
+instead of hanging; nothing switches backends on its own.
+
 ## Testing
 
 | Suite | Command |
@@ -110,6 +134,7 @@ The dashboard does not modify your `.env`, model files, or cptr installation.
 | Model Tuner | `uv run --with pytest pytest -q` (in `Tools/model-tuner/`) |
 | Model Tuner, from a scratch venv | `python -m pytest -q` after `pip install pytest` |
 | Model storage (server share) | `powershell -NoProfile -ExecutionPolicy Bypass -File Tools\tests\Test-ModelStorage.ps1` |
+| Remote model backend | `powershell -NoProfile -ExecutionPolicy Bypass -File Tools\tests\Test-RemoteBackend.ps1` |
 
 The Relay Station suite passes (119 tests, stdlib only). Test coverage for the remaining
 components is listed in each component's README.

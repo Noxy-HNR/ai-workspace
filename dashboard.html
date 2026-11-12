@@ -597,6 +597,14 @@
         .active-stats > div { display: flex; justify-content: space-between; gap: 12px; }
         .active-stats dt { color: var(--text-muted); }
         .active-stats dd { margin: 0; color: var(--text-primary); text-align: right; font-variant-numeric: tabular-nums; }
+        .backend-row { padding: 12px 0; border-top: 1px solid var(--border); }
+        .backend-row:first-child { border-top: 0; }
+        .backend-line { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+        .backend-choice { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: var(--text-primary); cursor: pointer; }
+        .backend-choice input:disabled + span { color: var(--text-muted); }
+        .backend-detail { margin: 4px 0 0 24px; font-size: 12.5px; line-height: 1.5; color: var(--text-secondary); overflow-wrap: anywhere; }
+        .backend-picker { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; font-size: 13px; color: var(--text-secondary); }
+        .backend-picker select { width: auto; padding: 6px 10px; font-size: 13px; }
         .overview-side .gpu-card { background: transparent; border: 0; border-radius: 0; box-shadow: none; padding: 8px 0 0; }
         .overview-side .gpu-card .gpu-name { color: var(--text-secondary); }
         .gpu-bar-track { background: var(--bg-field); }
@@ -703,6 +711,14 @@
                 </section>
 
                 <div class="overview-side">
+                    <section class="panel" aria-labelledby="backendsTitle">
+                        <div class="panel-head">
+                            <h3 class="label-caps" id="backendsTitle">Model backend</h3>
+                            <button type="button" class="btn btn-sm btn-ghost" onclick="refreshBackends(true)">Check</button>
+                        </div>
+                        <div id="backendsCard" role="radiogroup" aria-labelledby="backendsTitle"><p class="panel-meta">Loading...</p></div>
+                    </section>
+
                     <section class="panel" aria-labelledby="activeModelTitle">
                         <h3 class="label-caps" id="activeModelTitle">Active model</h3>
                         <div id="activeModel"><p class="panel-meta">Loading...</p></div>
@@ -748,6 +764,12 @@
                 <p style="color: var(--text-secondary); margin-bottom: 16px;">
                     Run 3 inference tests to measure your current generation speed in tokens/sec.
                 </p>
+                <label class="backend-picker">Model backend
+                    <select id="benchBackend" class="chat-input backend-select" onchange="setModelBackend(this.value)">
+                        <option value="local">This PC</option>
+                        <option value="hp">HP server</option>
+                    </select>
+                </label>
                 <button class="btn btn-primary" onclick="runQuickBenchmark()" id="benchmarkBtn">
                     ▶ Run 3-Run Benchmark
                 </button>
@@ -819,10 +841,16 @@
         <div class="tab-content" id="tab-chat">
             <div class="section">
                 <div class="section-title">Quick Chat</div>
+                <label class="backend-picker">Model backend
+                    <select id="chatBackend" class="chat-input backend-select" onchange="setModelBackend(this.value)">
+                        <option value="local">This PC</option>
+                        <option value="hp">HP server</option>
+                    </select>
+                </label>
                 <div class="chat-container">
                     <div class="chat-messages" id="chatMessages"></div>
                     <div class="chat-input-row">
-                        <input type="text" class="chat-input" id="chatInput" aria-label="Message to local model"
+                        <input type="text" class="chat-input" id="chatInput" aria-label="Message to the model"
                                placeholder="Type a message..." 
                                onkeydown="if(event.key==='Enter') sendChat()">
                         <button class="btn btn-primary" onclick="sendChat()">Send</button>
@@ -875,6 +903,94 @@
         const REASONING_EFFORTS = ['default','minimal','low','medium','high','xhigh','max'];
         
         let chatHistory = [];
+
+        // ---- Model backend: this PC's llama-server, or the HP server's through the dashboard ----
+        // The dashboard relays HP requests so the HP's API key stays out of the browser.
+        const BACKEND_STORAGE_KEY = 'ai-dashboard.model-backend';
+        const BACKEND_STATE_LABEL = { ready: 'Ready', loading: 'Loading model', offline: 'Offline', unauthorized: 'Key rejected', error: 'Error', 'not-configured': 'Not set up' };
+        const BACKEND_STATE_BADGE = { ready: 'badge-running', loading: 'badge-starting', offline: 'badge-stopped', unauthorized: 'badge-stopped', error: 'badge-stopped', 'not-configured': 'badge-idle' };
+        let modelBackend = 'local';
+        try { if (localStorage.getItem(BACKEND_STORAGE_KEY) === 'hp') modelBackend = 'hp'; } catch (e) {}
+        let backendsCache = null;
+
+        function modelApiBase() {
+            return modelBackend === 'hp' ? `${DASHBOARD_API}/api/remote/v1` : LLAMA_API;
+        }
+
+        function backendName(id = modelBackend) {
+            if (id === 'hp') return (backendsCache && backendsCache.remote && backendsCache.remote.name) || 'HP server';
+            return 'this PC';
+        }
+
+        function setModelBackend(id) {
+            modelBackend = id === 'hp' ? 'hp' : 'local';
+            try { localStorage.setItem(BACKEND_STORAGE_KEY, modelBackend); } catch (e) {}
+            renderBackends();
+            if (modelBackend === 'hp' && backendsCache && backendsCache.remote && backendsCache.remote.state !== 'ready') {
+                addFeedback(`${backendName()}: ${backendsCache.remote.message || BACKEND_STATE_LABEL[backendsCache.remote.state] || 'not ready'}`, 'warn');
+            }
+        }
+
+        async function refreshBackends(force = false) {
+            try {
+                const resp = await fetch(`${DASHBOARD_API}/api/backends${force ? '?refresh=1' : ''}`, { signal: AbortSignal.timeout(15000) });
+                backendsCache = await resp.json();
+            } catch (e) {
+                backendsCache = null;
+            }
+            renderBackends();
+            return backendsCache;
+        }
+
+        function renderBackends() {
+            const remote = backendsCache && backendsCache.remote;
+            document.querySelectorAll('.backend-select').forEach(sel => {
+                sel.value = modelBackend;
+                const hpOption = sel.querySelector('option[value="hp"]');
+                if (hpOption) {
+                    const name = remote && remote.name ? remote.name : 'HP server';
+                    hpOption.textContent = remote && remote.state !== 'ready' ? `${name} (${(BACKEND_STATE_LABEL[remote.state] || remote.state).toLowerCase()})` : name;
+                }
+            });
+            const box = document.getElementById('backendsCard');
+            if (!box) return;
+            if (!backendsCache) {
+                box.innerHTML = '<p class="panel-meta">Could not check the backends. Is dashboard-server running?</p>';
+                return;
+            }
+            const local = backendsCache.local || { state: 'offline' };
+            const hp = remote || { state: 'not-configured' };
+            const activeLocal = (modelsCache || []).find(m => m.isActive);
+            const localDetail = local.state === 'ready'
+                ? (activeLocal ? activeLocal.filename.replace(/\.gguf$/i, '') : 'llama-server is answering.')
+                : 'llama-server on this PC is not responding.';
+            const hpParts = [];
+            if (hp.model) hpParts.push(hp.model);
+            if (hp.state === 'ready' && hp.latencyMs != null) hpParts.push(`${hp.latencyMs} ms`);
+            if (hp.url) hpParts.push(hp.url);
+            if (hp.state !== 'ready' && hp.message) hpParts.push(hp.message);
+            const row = (id, title, state, detail) => `
+                <div class="backend-row">
+                    <div class="backend-line">
+                        <label class="backend-choice">
+                            <input type="radio" name="modelBackend" value="${id}" ${modelBackend === id ? 'checked' : ''}
+                                   ${id === 'hp' && state === 'not-configured' ? 'disabled' : ''} onchange="setModelBackend('${id}')">
+                            <span>${escapeHtml(title)}</span>
+                        </label>
+                        <span class="service-badge ${BACKEND_STATE_BADGE[state] || 'badge-idle'}">${escapeHtml(BACKEND_STATE_LABEL[state] || state)}</span>
+                    </div>
+                    <p class="backend-detail">${escapeHtml(detail)}</p>
+                </div>`;
+            box.innerHTML = row('local', 'This PC', local.state, localDetail)
+                + row('hp', hp.name || 'HP server', hp.state, hpParts.join(' · ') || 'Not set up.');
+        }
+
+        // An OpenAI-style error body ({error: {message}}) or a plain HTTP failure, as one line.
+        function modelErrorText(resp, data) {
+            const err = data && data.error;
+            const msg = err && (typeof err === 'string' ? err : err.message);
+            return msg || `HTTP ${resp.status}`;
+        }
         let logRefreshInterval = null;
         let benchmarkRunning = false;
         
@@ -947,7 +1063,7 @@
                 renderServices(data.services);
                 renderSystemInfo(data.system);
                 renderGpuCard(data.gpu);
-                refreshActiveModel();
+                refreshActiveModel().then(() => refreshBackends());
                 addFeedback('Status refreshed', 'success');
             } catch (e) {
                 addFeedback(`API error: ${e.message}. Is dashboard-server running?`, 'error');
@@ -1222,18 +1338,30 @@
             btn.disabled = true;
             btn.textContent = '⏳ Running...';
             
-            addFeedback('Starting benchmark (3 runs)...', 'info');
+            // Pinned for all three runs, so changing the picker mid-benchmark can't mix machines.
+            const benchBackend = modelBackend;
+            const benchApi = modelApiBase();
+            const benchName = backendName();
+            addFeedback(`Starting benchmark on ${benchName} (3 runs)...`, 'info');
             document.getElementById('benchmarkResults').style.display = 'block';
             document.getElementById('avgTps').textContent = '--';
             document.getElementById('maxTps').textContent = '--';
             document.getElementById('minTps').textContent = '--';
             
             try {
-                // Check if llama is reachable
-                try {
-                    await fetch(`${LLAMA_API}/models`, { signal: AbortSignal.timeout(3000) });
-                } catch {
-                    addFeedback('llama-server not reachable. Start it first.', 'error');
+                // Check if the chosen backend is reachable
+                let reachable = true;
+                if (benchBackend === 'hp') {
+                    const b = await refreshBackends(true);
+                    reachable = !!(b && b.remote && b.remote.state === 'ready');
+                } else {
+                    try {
+                        await fetch(`${LLAMA_API}/models`, { signal: AbortSignal.timeout(3000) });
+                    } catch { reachable = false; }
+                }
+                if (!reachable) {
+                    const why = benchBackend === 'hp' && backendsCache && backendsCache.remote ? backendsCache.remote.message : 'Start it first.';
+                    addFeedback(`${benchName} is not reachable. ${why}`, 'error');
                     btn.disabled = false;
                     btn.textContent = '▶ Run 3-Run Benchmark';
                     benchmarkRunning = false;
@@ -1248,7 +1376,7 @@
                     const sw = performance.now();
                     
                     try {
-                        const resp = await fetch(`${LLAMA_API}/chat/completions`, {
+                        const resp = await fetch(`${benchApi}/chat/completions`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({
@@ -1259,10 +1387,12 @@
                                 stream: false
                             })
                         });
-                        const data = await resp.json();
+                        const data = await resp.json().catch(() => null);
                         const elapsed = performance.now() - sw;
                         
-                        if (data.usage && data.usage.completion_tokens > 0) {
+                        if (!resp.ok) {
+                            addFeedback(`  Run ${i}: ${modelErrorText(resp, data)}`, 'error');
+                        } else if (data && data.usage && data.usage.completion_tokens > 0) {
                             const tps = (data.usage.completion_tokens / (elapsed / 1000)).toFixed(2);
                             results.push(parseFloat(tps));
                             addFeedback(`  Run ${i}: ${tps} tokens/sec (${data.usage.completion_tokens} tokens in ${elapsed.toFixed(0)}ms)`, 'success');
@@ -1283,7 +1413,7 @@
                     document.getElementById('maxTps').textContent = `${max} t/s`;
                     document.getElementById('minTps').textContent = `${min} t/s`;
                     
-                    addFeedback(`Benchmark complete. Avg: ${avg} t/s, Best: ${max} t/s`, 'success');
+                    addFeedback(`Benchmark complete on ${benchName}. Avg: ${avg} t/s, Best: ${max} t/s`, 'success');
                 }
             } catch (e) {
                 addFeedback(`Benchmark error: ${e.message}`, 'error');
@@ -1372,11 +1502,22 @@
         }
 
         // ---- Chat ----
+        // One turn at a time: an HP reply can take minutes, and overlapping turns would interleave the history.
+        let chatPending = false;
         async function sendChat() {
             const input = document.getElementById('chatInput');
             const msg = input.value.trim();
             if (!msg) return;
+            if (chatPending) {
+                addFeedback('Still waiting for the last reply.', 'warn');
+                return;
+            }
+            chatPending = true;
             input.value = '';
+            // Pinned for this turn, so changing the picker mid-reply doesn't mislabel it.
+            const turnBackend = modelBackend;
+            const turnApi = modelApiBase();
+            const turnName = backendName();
             
             addChatMessage('user', msg);
             chatHistory.push({ role: 'user', content: msg });
@@ -1392,22 +1533,34 @@
                     stream: false
                 });
                 
-                const resp = await fetch(`${LLAMA_API}/chat/completions`, {
+                const resp = await fetch(`${turnApi}/chat/completions`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: body
                 });
-                const data = await resp.json();
+                const data = await resp.json().catch(() => null);
                 
-                if (data.choices && data.choices[0]) {
+                if (resp.ok && data && data.choices && data.choices[0]) {
                     const reply = data.choices[0].message.content;
                     addChatMessage('assistant', reply);
                     chatHistory.push({ role: 'assistant', content: reply });
+                } else if (!resp.ok) {
+                    // Keep the failed turn out of the history so a retry, or the other backend, starts clean.
+                    chatHistory.pop();
+                    const hint = turnBackend === 'hp' ? '\n\nSwitch the model backend to This PC to keep chatting.' : '';
+                    addChatMessage('assistant', `${turnName} could not answer: ${modelErrorText(resp, data)}${hint}`);
+                    if (turnBackend === 'hp') refreshBackends(true);
                 } else {
                     addChatMessage('assistant', 'No response from model.');
                 }
             } catch (e) {
-                addChatMessage('assistant', `Error: ${e.message}\n\nMake sure llama-server is running with a model loaded.`);
+                chatHistory.pop();
+                const hint = turnBackend === 'hp'
+                    ? 'Make sure the dashboard server is running.'
+                    : 'Make sure llama-server is running with a model loaded.';
+                addChatMessage('assistant', `Error: ${e.message}\n\n${hint}`);
+            } finally {
+                chatPending = false;
             }
         }
         
