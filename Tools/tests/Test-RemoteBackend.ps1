@@ -228,7 +228,8 @@ $html = Get-Content -Raw -LiteralPath (Join-Path $repo 'dashboard.html')
 Assert-True ($html -notmatch 'AI_REMOTE_LLM_API_KEY|Authorization') 'the page never handles the key'
 Assert-True ($html -match '/api/remote/v1') 'the page sends HP chat through the dashboard'
 $gitignore = Get-Content -Raw -LiteralPath (Join-Path $repo '.gitignore')
-Assert-True ($gitignore -match '(?m)^Config/remote-backend\.json$') 'the settings file is gitignored'
+# \r? because a Windows checkout has CRLF line endings, where $ alone never matches before \r.
+Assert-True ($gitignore -match '(?m)^Config/remote-backend\.json\r?$') 'the settings file is gitignored'
 
 if ($failures.Count) {
     $failures | ForEach-Object { Write-Host "FAIL: $_" -ForegroundColor Red }
